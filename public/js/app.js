@@ -21443,6 +21443,9 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _Components_TableHead__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! @/Components/TableHead */ "./resources/js/Components/TableHead.vue");
 /* harmony import */ var _Components_TableRow__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(/*! @/Components/TableRow */ "./resources/js/Components/TableRow.vue");
 /* harmony import */ var _Components_ButtonLink__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(/*! @/Components/ButtonLink */ "./resources/js/Components/ButtonLink.vue");
+/* harmony import */ var lodash__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(/*! lodash */ "./node_modules/lodash/lodash.js");
+/* harmony import */ var lodash__WEBPACK_IMPORTED_MODULE_10___default = /*#__PURE__*/__webpack_require__.n(lodash__WEBPACK_IMPORTED_MODULE_10__);
+
 
 
 
@@ -21462,28 +21465,42 @@ __webpack_require__.r(__webpack_exports__);
     var expose = _ref.expose;
     expose();
     var props = __props;
-    var search = (0,vue__WEBPACK_IMPORTED_MODULE_3__.ref)(props.filters.search);
-    var perPage = (0,vue__WEBPACK_IMPORTED_MODULE_3__.ref)(props.filters.perPage);
-    var movieTMDBId = (0,vue__WEBPACK_IMPORTED_MODULE_3__.ref)("");
-    (0,vue__WEBPACK_IMPORTED_MODULE_3__.watch)(search, function (value) {
-      _inertiajs_inertia__WEBPACK_IMPORTED_MODULE_4__.Inertia.get("/admin/movies", {
-        search: value,
-        perPage: perPage.value
-      }, {
-        preserveState: true,
-        replace: true
-      });
+    var movieFilters = (0,vue__WEBPACK_IMPORTED_MODULE_3__.reactive)({
+      search: props.filters.search,
+      perPage: props.filters.perPage
     });
-
-    function getMovies() {
-      _inertiajs_inertia__WEBPACK_IMPORTED_MODULE_4__.Inertia.get("/admin/movies", {
-        perPage: perPage.value,
-        search: search.value
-      }, {
+    var movieTMDBId = (0,vue__WEBPACK_IMPORTED_MODULE_3__.ref)("");
+    (0,vue__WEBPACK_IMPORTED_MODULE_3__.watch)(movieFilters, (0,lodash__WEBPACK_IMPORTED_MODULE_10__.throttle)(function () {
+      var query = (0,lodash__WEBPACK_IMPORTED_MODULE_10__.pickBy)(movieFilters);
+      var queryRoute = route("admin.movies.index", Object.keys(query).length ? query : {
+        remember: "forget"
+      });
+      _inertiajs_inertia__WEBPACK_IMPORTED_MODULE_4__.Inertia.get(queryRoute, {}, {
         preserveState: true,
         replace: true
       });
-    }
+    }, 400), {
+      deep: true
+    }); // watch(search, (value) => {
+    //   Inertia.get(
+    //     "/admin/movies",
+    //     { search: value, perPage: perPage.value },
+    //     {
+    //       preserveState: true,
+    //       replace: true,
+    //     }
+    //   );
+    // });
+    // function getMovies() {
+    //   Inertia.get(
+    //     "/admin/movies",
+    //     { perPage: perPage.value, search: search.value },
+    //     {
+    //       preserveState: true,
+    //       replace: true,
+    //     }
+    //   );
+    // }
 
     function generateMovie() {
       _inertiajs_inertia__WEBPACK_IMPORTED_MODULE_4__.Inertia.post("/admin/movies", {
@@ -21497,22 +21514,23 @@ __webpack_require__.r(__webpack_exports__);
 
     var __returned__ = {
       props: props,
-      search: search,
-      perPage: perPage,
+      movieFilters: movieFilters,
       movieTMDBId: movieTMDBId,
-      getMovies: getMovies,
       generateMovie: generateMovie,
       AdminLayout: _Layouts_AdminLayout_vue__WEBPACK_IMPORTED_MODULE_0__["default"],
       Link: _inertiajs_inertia_vue3__WEBPACK_IMPORTED_MODULE_1__.Link,
       Pagination: _Components_Pagination_vue__WEBPACK_IMPORTED_MODULE_2__["default"],
       ref: vue__WEBPACK_IMPORTED_MODULE_3__.ref,
+      reactive: vue__WEBPACK_IMPORTED_MODULE_3__.reactive,
       watch: vue__WEBPACK_IMPORTED_MODULE_3__.watch,
       Inertia: _inertiajs_inertia__WEBPACK_IMPORTED_MODULE_4__.Inertia,
       Table: _Components_Table__WEBPACK_IMPORTED_MODULE_5__["default"],
       TableData: _Components_TableData__WEBPACK_IMPORTED_MODULE_6__["default"],
       TableHead: _Components_TableHead__WEBPACK_IMPORTED_MODULE_7__["default"],
       TableRow: _Components_TableRow__WEBPACK_IMPORTED_MODULE_8__["default"],
-      ButtonLink: _Components_ButtonLink__WEBPACK_IMPORTED_MODULE_9__["default"]
+      ButtonLink: _Components_ButtonLink__WEBPACK_IMPORTED_MODULE_9__["default"],
+      throttle: lodash__WEBPACK_IMPORTED_MODULE_10__.throttle,
+      pickBy: lodash__WEBPACK_IMPORTED_MODULE_10__.pickBy
     };
     Object.defineProperty(__returned__, '__isScriptSetup', {
       enumerable: false,
@@ -28276,22 +28294,24 @@ function render(_ctx, _cache, $props, $setup, $data, $options) {
         "class": "inline-flex items-center justify-center py-2 px-4 border border-transparent text-base leading-6 font-medium rounded-md text-white bg-green-600 hover:bg-green-500 focus:outline-none focus:border-indigo-700 focus:shadow-outline-indigo active:bg-green-700 transition duration-150 ease-in-out disabled:opacity-50"
       }, _hoisted_11)])])]), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("div", _hoisted_12, [(0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("div", _hoisted_13, [(0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("div", _hoisted_14, [(0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("div", _hoisted_15, [(0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("div", _hoisted_16, [_hoisted_17, (0,vue__WEBPACK_IMPORTED_MODULE_0__.withDirectives)((0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("input", {
         "onUpdate:modelValue": _cache[1] || (_cache[1] = function ($event) {
-          return $setup.search = $event;
+          return $setup.movieFilters.search = $event;
         }),
         type: "text",
         placeholder: "Search by title",
         "class": "px-8 py-3 w-full md:w-2/6 rounded-md bg-gray-100 border-transparent focus:border-gray-500 focus:bg-white focus:ring-0 text-sm"
       }, null, 512
       /* NEED_PATCH */
-      ), [[vue__WEBPACK_IMPORTED_MODULE_0__.vModelText, $setup.search]])])]), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("div", _hoisted_18, [(0,vue__WEBPACK_IMPORTED_MODULE_0__.withDirectives)((0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("select", {
+      ), [[vue__WEBPACK_IMPORTED_MODULE_0__.vModelText, $setup.movieFilters.search]])])]), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("div", _hoisted_18, [(0,vue__WEBPACK_IMPORTED_MODULE_0__.withDirectives)((0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("select", {
         "onUpdate:modelValue": _cache[2] || (_cache[2] = function ($event) {
-          return $setup.perPage = $event;
+          return $setup.movieFilters.perPage = $event;
         }),
-        onChange: $setup.getMovies,
+        onChange: _cache[3] || (_cache[3] = function ($event) {
+          return $setup.movieFilters.perPage === $event.target.value;
+        }),
         "class": "px-4 py-3 w-full rounded-md bg-gray-100 border-transparent focus:border-gray-500 focus:bg-white focus:ring-0 text-sm"
       }, _hoisted_22, 544
       /* HYDRATE_EVENTS, NEED_PATCH */
-      ), [[vue__WEBPACK_IMPORTED_MODULE_0__.vModelSelect, $setup.perPage]])])])]), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("div", _hoisted_23, [(0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)($setup["Table"], null, {
+      ), [[vue__WEBPACK_IMPORTED_MODULE_0__.vModelSelect, $setup.movieFilters.perPage]])])])]), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("div", _hoisted_23, [(0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)($setup["Table"], null, {
         tableHead: (0,vue__WEBPACK_IMPORTED_MODULE_0__.withCtx)(function () {
           return [(0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)($setup["TableHead"], null, {
             "default": (0,vue__WEBPACK_IMPORTED_MODULE_0__.withCtx)(function () {
@@ -31583,12 +31603,6 @@ _inertiajs_progress__WEBPACK_IMPORTED_MODULE_2__.InertiaProgress.init({
 /***/ ((__unused_webpack_module, __unused_webpack_exports, __webpack_require__) => {
 
 window._ = __webpack_require__(/*! lodash */ "./node_modules/lodash/lodash.js");
-/**
- * We'll load the axios HTTP library which allows us to easily issue requests
- * to our Laravel back-end. This library automatically handles sending the
- * CSRF token as a header based on the value of the "XSRF" token cookie.
- */
-
 window.axios = __webpack_require__(/*! axios */ "./node_modules/axios/index.js");
 window.axios.defaults.headers.common['X-Requested-With'] = 'XMLHttpRequest';
 /**
