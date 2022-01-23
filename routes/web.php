@@ -41,6 +41,12 @@ Route::middleware(['auth:sanctum', 'verified', 'role:admin'])->prefix('admin')->
     '/movies/{movie}/attach', [MovieAttachController::class, 'index'])->name('movies.attach');
     Route::post('/movies/{movie}/add-trailer', [MovieAttachController::class, 'addTrailer'])->name(
     'movies.add.trailer');
+    Route::post('/movies/{movie}/add-casts', [MovieAttachController::class, 'addCast'])->name(
+        'movies.add.casts'
+    );
+    Route::post('/movies/{movie}/add-tags', [MovieAttachController::class, 'addTag'])->name(
+        'movies.add.tags'
+    );
     Route::delete('/trailer-urls/{trailer_url}', [MovieAttachController::class, 'destroyTrailer'])->name('trailers.destroy');
     Route::resource('/tv-shows', TvShowController::class);
     Route::resource('/tv-shows/{tv_show}/seasons', SeasonController::class);

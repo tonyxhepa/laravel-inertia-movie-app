@@ -1468,7 +1468,7 @@ function parseAttributes(context, type) {
         }
         const attr = parseAttribute(context, attributeNames);
         // Trim whitespace between class
-        // https://github.com/vuejs/vue-next/issues/4251
+        // https://github.com/vuejs/core/issues/4251
         if (attr.type === 6 /* ATTRIBUTE */ &&
             attr.value &&
             attr.name === 'class') {
@@ -1704,7 +1704,7 @@ function parseTextData(context, length, mode) {
     advanceBy(context, length);
     if (mode === 2 /* RAWTEXT */ ||
         mode === 3 /* CDATA */ ||
-        rawText.indexOf('&') === -1) {
+        !rawText.includes('&')) {
         return rawText;
     }
     else {
@@ -3328,6 +3328,7 @@ const transformFor = createStructuralDirectiveTransform('for', (node, dir, conte
         const renderExp = createCallExpression(helper(RENDER_LIST), [
             forNode.source
         ]);
+        const isTemplate = isTemplateNode(node);
         const memo = findDir(node, 'memo');
         const keyProp = findProp(node, `key`);
         const keyExp = keyProp &&
@@ -3347,7 +3348,6 @@ const transformFor = createStructuralDirectiveTransform('for', (node, dir, conte
         return () => {
             // finish the codegen now that all children have been traversed
             let childBlock;
-            const isTemplate = isTemplateNode(node);
             const { children } = forNode;
             // check <template v-for> key placement
             if (( true) && isTemplate) {
@@ -5672,6 +5672,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   "isReactive": () => (/* binding */ isReactive),
 /* harmony export */   "isReadonly": () => (/* binding */ isReadonly),
 /* harmony export */   "isRef": () => (/* binding */ isRef),
+/* harmony export */   "isShallow": () => (/* binding */ isShallow),
 /* harmony export */   "markRaw": () => (/* binding */ markRaw),
 /* harmony export */   "onScopeDispose": () => (/* binding */ onScopeDispose),
 /* harmony export */   "pauseTracking": () => (/* binding */ pauseTracking),
@@ -5841,7 +5842,7 @@ class ReactiveEffect {
         if (!this.active) {
             return this.fn();
         }
-        if (!effectStack.includes(this)) {
+        if (!effectStack.length || !effectStack.includes(this)) {
             try {
                 effectStack.push((activeEffect = this));
                 enableTracking();
@@ -6101,6 +6102,9 @@ function createGetter(isReadonly = false, shallow = false) {
         else if (key === "__v_isReadonly" /* IS_READONLY */) {
             return isReadonly;
         }
+        else if (key === "__v_isShallow" /* IS_SHALLOW */) {
+            return shallow;
+        }
         else if (key === "__v_raw" /* RAW */ &&
             receiver ===
                 (isReadonly
@@ -6145,9 +6149,14 @@ const shallowSet = /*#__PURE__*/ createSetter(true);
 function createSetter(shallow = false) {
     return function set(target, key, value, receiver) {
         let oldValue = target[key];
+        if (isReadonly(oldValue) && isRef(oldValue)) {
+            return false;
+        }
         if (!shallow && !isReadonly(value)) {
-            value = toRaw(value);
-            oldValue = toRaw(oldValue);
+            if (!isShallow(value)) {
+                value = toRaw(value);
+                oldValue = toRaw(oldValue);
+            }
             if (!(0,_vue_shared__WEBPACK_IMPORTED_MODULE_0__.isArray)(target) && isRef(oldValue) && !isRef(value)) {
                 oldValue.value = value;
                 return true;
@@ -6535,7 +6544,7 @@ function getTargetType(value) {
 }
 function reactive(target) {
     // if trying to observe a readonly proxy, return the readonly version.
-    if (target && target["__v_isReadonly" /* IS_READONLY */]) {
+    if (isReadonly(target)) {
         return target;
     }
     return createReactiveObject(target, false, mutableHandlers, mutableCollectionHandlers, reactiveMap);
@@ -6600,6 +6609,9 @@ function isReactive(value) {
 function isReadonly(value) {
     return !!(value && value["__v_isReadonly" /* IS_READONLY */]);
 }
+function isShallow(value) {
+    return !!(value && value["__v_isShallow" /* IS_SHALLOW */]);
+}
 function isProxy(value) {
     return isReactive(value) || isReadonly(value);
 }
@@ -6660,22 +6672,22 @@ function createRef(rawValue, shallow) {
     return new RefImpl(rawValue, shallow);
 }
 class RefImpl {
-    constructor(value, _shallow) {
-        this._shallow = _shallow;
+    constructor(value, __v_isShallow) {
+        this.__v_isShallow = __v_isShallow;
         this.dep = undefined;
         this.__v_isRef = true;
-        this._rawValue = _shallow ? value : toRaw(value);
-        this._value = _shallow ? value : toReactive(value);
+        this._rawValue = __v_isShallow ? value : toRaw(value);
+        this._value = __v_isShallow ? value : toReactive(value);
     }
     get value() {
         trackRefValue(this);
         return this._value;
     }
     set value(newVal) {
-        newVal = this._shallow ? newVal : toRaw(newVal);
+        newVal = this.__v_isShallow ? newVal : toRaw(newVal);
         if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_0__.hasChanged)(newVal, this._rawValue)) {
             this._rawValue = newVal;
-            this._value = this._shallow ? newVal : toReactive(newVal);
+            this._value = this.__v_isShallow ? newVal : toReactive(newVal);
             triggerRefValue(this, newVal);
         }
     }
@@ -6755,24 +6767,26 @@ function toRef(object, key, defaultValue) {
 }
 
 class ComputedRefImpl {
-    constructor(getter, _setter, isReadonly) {
+    constructor(getter, _setter, isReadonly, isSSR) {
         this._setter = _setter;
         this.dep = undefined;
-        this._dirty = true;
         this.__v_isRef = true;
+        this._dirty = true;
         this.effect = new ReactiveEffect(getter, () => {
             if (!this._dirty) {
                 this._dirty = true;
                 triggerRefValue(this);
             }
         });
+        this.effect.computed = this;
+        this.effect.active = this._cacheable = !isSSR;
         this["__v_isReadonly" /* IS_READONLY */] = isReadonly;
     }
     get value() {
         // the computed ref may get wrapped by other proxies e.g. readonly() #3376
         const self = toRaw(this);
         trackRefValue(self);
-        if (self._dirty) {
+        if (self._dirty || !self._cacheable) {
             self._dirty = false;
             self._value = self.effect.run();
         }
@@ -6782,7 +6796,7 @@ class ComputedRefImpl {
         this._setter(newValue);
     }
 }
-function computed(getterOrOptions, debugOptions) {
+function computed(getterOrOptions, debugOptions, isSSR = false) {
     let getter;
     let setter;
     const onlyGetter = (0,_vue_shared__WEBPACK_IMPORTED_MODULE_0__.isFunction)(getterOrOptions);
@@ -6798,8 +6812,8 @@ function computed(getterOrOptions, debugOptions) {
         getter = getterOrOptions.get;
         setter = getterOrOptions.set;
     }
-    const cRef = new ComputedRefImpl(getter, setter, onlyGetter || !setter);
-    if (( true) && debugOptions) {
+    const cRef = new ComputedRefImpl(getter, setter, onlyGetter || !setter, isSSR);
+    if (( true) && debugOptions && !isSSR) {
         cRef.effect.onTrack = debugOptions.onTrack;
         cRef.effect.onTrigger = debugOptions.onTrigger;
     }
@@ -6854,14 +6868,14 @@ class DeferredComputedRefImpl {
                 // value invalidation in case of sync access; normal effects are
                 // deferred to be triggered in scheduler.
                 for (const e of this.dep) {
-                    if (e.computed) {
+                    if (e.computed instanceof DeferredComputedRefImpl) {
                         e.scheduler(true /* computedTrigger */);
                     }
                 }
             }
             this._dirty = true;
         });
-        this.effect.computed = true;
+        this.effect.computed = this;
     }
     _get() {
         if (this._dirty) {
@@ -6897,7 +6911,6 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   "EffectScope": () => (/* reexport safe */ _vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.EffectScope),
 /* harmony export */   "ReactiveEffect": () => (/* reexport safe */ _vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.ReactiveEffect),
-/* harmony export */   "computed": () => (/* reexport safe */ _vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.computed),
 /* harmony export */   "customRef": () => (/* reexport safe */ _vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.customRef),
 /* harmony export */   "effect": () => (/* reexport safe */ _vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.effect),
 /* harmony export */   "effectScope": () => (/* reexport safe */ _vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.effectScope),
@@ -6906,6 +6919,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   "isReactive": () => (/* reexport safe */ _vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.isReactive),
 /* harmony export */   "isReadonly": () => (/* reexport safe */ _vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.isReadonly),
 /* harmony export */   "isRef": () => (/* reexport safe */ _vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.isRef),
+/* harmony export */   "isShallow": () => (/* reexport safe */ _vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.isShallow),
 /* harmony export */   "markRaw": () => (/* reexport safe */ _vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.markRaw),
 /* harmony export */   "onScopeDispose": () => (/* reexport safe */ _vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.onScopeDispose),
 /* harmony export */   "proxyRefs": () => (/* reexport safe */ _vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.proxyRefs),
@@ -6940,6 +6954,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   "callWithErrorHandling": () => (/* binding */ callWithErrorHandling),
 /* harmony export */   "cloneVNode": () => (/* binding */ cloneVNode),
 /* harmony export */   "compatUtils": () => (/* binding */ compatUtils),
+/* harmony export */   "computed": () => (/* binding */ computed),
 /* harmony export */   "createBlock": () => (/* binding */ createBlock),
 /* harmony export */   "createCommentVNode": () => (/* binding */ createCommentVNode),
 /* harmony export */   "createElementBlock": () => (/* binding */ createElementBlock),
@@ -7025,6 +7040,432 @@ __webpack_require__.r(__webpack_exports__);
 
 
 
+
+const stack = [];
+function pushWarningContext(vnode) {
+    stack.push(vnode);
+}
+function popWarningContext() {
+    stack.pop();
+}
+function warn(msg, ...args) {
+    // avoid props formatting or warn handler tracking deps that might be mutated
+    // during patch, leading to infinite recursion.
+    (0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.pauseTracking)();
+    const instance = stack.length ? stack[stack.length - 1].component : null;
+    const appWarnHandler = instance && instance.appContext.config.warnHandler;
+    const trace = getComponentTrace();
+    if (appWarnHandler) {
+        callWithErrorHandling(appWarnHandler, instance, 11 /* APP_WARN_HANDLER */, [
+            msg + args.join(''),
+            instance && instance.proxy,
+            trace
+                .map(({ vnode }) => `at <${formatComponentName(instance, vnode.type)}>`)
+                .join('\n'),
+            trace
+        ]);
+    }
+    else {
+        const warnArgs = [`[Vue warn]: ${msg}`, ...args];
+        /* istanbul ignore if */
+        if (trace.length &&
+            // avoid spamming console during tests
+            !false) {
+            warnArgs.push(`\n`, ...formatTrace(trace));
+        }
+        console.warn(...warnArgs);
+    }
+    (0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.resetTracking)();
+}
+function getComponentTrace() {
+    let currentVNode = stack[stack.length - 1];
+    if (!currentVNode) {
+        return [];
+    }
+    // we can't just use the stack because it will be incomplete during updates
+    // that did not start from the root. Re-construct the parent chain using
+    // instance parent pointers.
+    const normalizedStack = [];
+    while (currentVNode) {
+        const last = normalizedStack[0];
+        if (last && last.vnode === currentVNode) {
+            last.recurseCount++;
+        }
+        else {
+            normalizedStack.push({
+                vnode: currentVNode,
+                recurseCount: 0
+            });
+        }
+        const parentInstance = currentVNode.component && currentVNode.component.parent;
+        currentVNode = parentInstance && parentInstance.vnode;
+    }
+    return normalizedStack;
+}
+/* istanbul ignore next */
+function formatTrace(trace) {
+    const logs = [];
+    trace.forEach((entry, i) => {
+        logs.push(...(i === 0 ? [] : [`\n`]), ...formatTraceEntry(entry));
+    });
+    return logs;
+}
+function formatTraceEntry({ vnode, recurseCount }) {
+    const postfix = recurseCount > 0 ? `... (${recurseCount} recursive calls)` : ``;
+    const isRoot = vnode.component ? vnode.component.parent == null : false;
+    const open = ` at <${formatComponentName(vnode.component, vnode.type, isRoot)}`;
+    const close = `>` + postfix;
+    return vnode.props
+        ? [open, ...formatProps(vnode.props), close]
+        : [open + close];
+}
+/* istanbul ignore next */
+function formatProps(props) {
+    const res = [];
+    const keys = Object.keys(props);
+    keys.slice(0, 3).forEach(key => {
+        res.push(...formatProp(key, props[key]));
+    });
+    if (keys.length > 3) {
+        res.push(` ...`);
+    }
+    return res;
+}
+/* istanbul ignore next */
+function formatProp(key, value, raw) {
+    if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isString)(value)) {
+        value = JSON.stringify(value);
+        return raw ? value : [`${key}=${value}`];
+    }
+    else if (typeof value === 'number' ||
+        typeof value === 'boolean' ||
+        value == null) {
+        return raw ? value : [`${key}=${value}`];
+    }
+    else if ((0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.isRef)(value)) {
+        value = formatProp(key, (0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.toRaw)(value.value), true);
+        return raw ? value : [`${key}=Ref<`, value, `>`];
+    }
+    else if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isFunction)(value)) {
+        return [`${key}=fn${value.name ? `<${value.name}>` : ``}`];
+    }
+    else {
+        value = (0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.toRaw)(value);
+        return raw ? value : [`${key}=`, value];
+    }
+}
+
+const ErrorTypeStrings = {
+    ["sp" /* SERVER_PREFETCH */]: 'serverPrefetch hook',
+    ["bc" /* BEFORE_CREATE */]: 'beforeCreate hook',
+    ["c" /* CREATED */]: 'created hook',
+    ["bm" /* BEFORE_MOUNT */]: 'beforeMount hook',
+    ["m" /* MOUNTED */]: 'mounted hook',
+    ["bu" /* BEFORE_UPDATE */]: 'beforeUpdate hook',
+    ["u" /* UPDATED */]: 'updated',
+    ["bum" /* BEFORE_UNMOUNT */]: 'beforeUnmount hook',
+    ["um" /* UNMOUNTED */]: 'unmounted hook',
+    ["a" /* ACTIVATED */]: 'activated hook',
+    ["da" /* DEACTIVATED */]: 'deactivated hook',
+    ["ec" /* ERROR_CAPTURED */]: 'errorCaptured hook',
+    ["rtc" /* RENDER_TRACKED */]: 'renderTracked hook',
+    ["rtg" /* RENDER_TRIGGERED */]: 'renderTriggered hook',
+    [0 /* SETUP_FUNCTION */]: 'setup function',
+    [1 /* RENDER_FUNCTION */]: 'render function',
+    [2 /* WATCH_GETTER */]: 'watcher getter',
+    [3 /* WATCH_CALLBACK */]: 'watcher callback',
+    [4 /* WATCH_CLEANUP */]: 'watcher cleanup function',
+    [5 /* NATIVE_EVENT_HANDLER */]: 'native event handler',
+    [6 /* COMPONENT_EVENT_HANDLER */]: 'component event handler',
+    [7 /* VNODE_HOOK */]: 'vnode hook',
+    [8 /* DIRECTIVE_HOOK */]: 'directive hook',
+    [9 /* TRANSITION_HOOK */]: 'transition hook',
+    [10 /* APP_ERROR_HANDLER */]: 'app errorHandler',
+    [11 /* APP_WARN_HANDLER */]: 'app warnHandler',
+    [12 /* FUNCTION_REF */]: 'ref function',
+    [13 /* ASYNC_COMPONENT_LOADER */]: 'async component loader',
+    [14 /* SCHEDULER */]: 'scheduler flush. This is likely a Vue internals bug. ' +
+        'Please open an issue at https://new-issue.vuejs.org/?repo=vuejs/core'
+};
+function callWithErrorHandling(fn, instance, type, args) {
+    let res;
+    try {
+        res = args ? fn(...args) : fn();
+    }
+    catch (err) {
+        handleError(err, instance, type);
+    }
+    return res;
+}
+function callWithAsyncErrorHandling(fn, instance, type, args) {
+    if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isFunction)(fn)) {
+        const res = callWithErrorHandling(fn, instance, type, args);
+        if (res && (0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isPromise)(res)) {
+            res.catch(err => {
+                handleError(err, instance, type);
+            });
+        }
+        return res;
+    }
+    const values = [];
+    for (let i = 0; i < fn.length; i++) {
+        values.push(callWithAsyncErrorHandling(fn[i], instance, type, args));
+    }
+    return values;
+}
+function handleError(err, instance, type, throwInDev = true) {
+    const contextVNode = instance ? instance.vnode : null;
+    if (instance) {
+        let cur = instance.parent;
+        // the exposed instance is the render proxy to keep it consistent with 2.x
+        const exposedInstance = instance.proxy;
+        // in production the hook receives only the error code
+        const errorInfo = ( true) ? ErrorTypeStrings[type] : 0;
+        while (cur) {
+            const errorCapturedHooks = cur.ec;
+            if (errorCapturedHooks) {
+                for (let i = 0; i < errorCapturedHooks.length; i++) {
+                    if (errorCapturedHooks[i](err, exposedInstance, errorInfo) === false) {
+                        return;
+                    }
+                }
+            }
+            cur = cur.parent;
+        }
+        // app-level handling
+        const appErrorHandler = instance.appContext.config.errorHandler;
+        if (appErrorHandler) {
+            callWithErrorHandling(appErrorHandler, null, 10 /* APP_ERROR_HANDLER */, [err, exposedInstance, errorInfo]);
+            return;
+        }
+    }
+    logError(err, type, contextVNode, throwInDev);
+}
+function logError(err, type, contextVNode, throwInDev = true) {
+    if ((true)) {
+        const info = ErrorTypeStrings[type];
+        if (contextVNode) {
+            pushWarningContext(contextVNode);
+        }
+        warn(`Unhandled error${info ? ` during execution of ${info}` : ``}`);
+        if (contextVNode) {
+            popWarningContext();
+        }
+        // crash in dev by default so it's more noticeable
+        if (throwInDev) {
+            throw err;
+        }
+        else {
+            console.error(err);
+        }
+    }
+    else {}
+}
+
+let isFlushing = false;
+let isFlushPending = false;
+const queue = [];
+let flushIndex = 0;
+const pendingPreFlushCbs = [];
+let activePreFlushCbs = null;
+let preFlushIndex = 0;
+const pendingPostFlushCbs = [];
+let activePostFlushCbs = null;
+let postFlushIndex = 0;
+const resolvedPromise = Promise.resolve();
+let currentFlushPromise = null;
+let currentPreFlushParentJob = null;
+const RECURSION_LIMIT = 100;
+function nextTick(fn) {
+    const p = currentFlushPromise || resolvedPromise;
+    return fn ? p.then(this ? fn.bind(this) : fn) : p;
+}
+// #2768
+// Use binary-search to find a suitable position in the queue,
+// so that the queue maintains the increasing order of job's id,
+// which can prevent the job from being skipped and also can avoid repeated patching.
+function findInsertionIndex(id) {
+    // the start index should be `flushIndex + 1`
+    let start = flushIndex + 1;
+    let end = queue.length;
+    while (start < end) {
+        const middle = (start + end) >>> 1;
+        const middleJobId = getId(queue[middle]);
+        middleJobId < id ? (start = middle + 1) : (end = middle);
+    }
+    return start;
+}
+function queueJob(job) {
+    // the dedupe search uses the startIndex argument of Array.includes()
+    // by default the search index includes the current job that is being run
+    // so it cannot recursively trigger itself again.
+    // if the job is a watch() callback, the search will start with a +1 index to
+    // allow it recursively trigger itself - it is the user's responsibility to
+    // ensure it doesn't end up in an infinite loop.
+    if ((!queue.length ||
+        !queue.includes(job, isFlushing && job.allowRecurse ? flushIndex + 1 : flushIndex)) &&
+        job !== currentPreFlushParentJob) {
+        if (job.id == null) {
+            queue.push(job);
+        }
+        else {
+            queue.splice(findInsertionIndex(job.id), 0, job);
+        }
+        queueFlush();
+    }
+}
+function queueFlush() {
+    if (!isFlushing && !isFlushPending) {
+        isFlushPending = true;
+        currentFlushPromise = resolvedPromise.then(flushJobs);
+    }
+}
+function invalidateJob(job) {
+    const i = queue.indexOf(job);
+    if (i > flushIndex) {
+        queue.splice(i, 1);
+    }
+}
+function queueCb(cb, activeQueue, pendingQueue, index) {
+    if (!(0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isArray)(cb)) {
+        if (!activeQueue ||
+            !activeQueue.includes(cb, cb.allowRecurse ? index + 1 : index)) {
+            pendingQueue.push(cb);
+        }
+    }
+    else {
+        // if cb is an array, it is a component lifecycle hook which can only be
+        // triggered by a job, which is already deduped in the main queue, so
+        // we can skip duplicate check here to improve perf
+        pendingQueue.push(...cb);
+    }
+    queueFlush();
+}
+function queuePreFlushCb(cb) {
+    queueCb(cb, activePreFlushCbs, pendingPreFlushCbs, preFlushIndex);
+}
+function queuePostFlushCb(cb) {
+    queueCb(cb, activePostFlushCbs, pendingPostFlushCbs, postFlushIndex);
+}
+function flushPreFlushCbs(seen, parentJob = null) {
+    if (pendingPreFlushCbs.length) {
+        currentPreFlushParentJob = parentJob;
+        activePreFlushCbs = [...new Set(pendingPreFlushCbs)];
+        pendingPreFlushCbs.length = 0;
+        if ((true)) {
+            seen = seen || new Map();
+        }
+        for (preFlushIndex = 0; preFlushIndex < activePreFlushCbs.length; preFlushIndex++) {
+            if (( true) &&
+                checkRecursiveUpdates(seen, activePreFlushCbs[preFlushIndex])) {
+                continue;
+            }
+            activePreFlushCbs[preFlushIndex]();
+        }
+        activePreFlushCbs = null;
+        preFlushIndex = 0;
+        currentPreFlushParentJob = null;
+        // recursively flush until it drains
+        flushPreFlushCbs(seen, parentJob);
+    }
+}
+function flushPostFlushCbs(seen) {
+    if (pendingPostFlushCbs.length) {
+        const deduped = [...new Set(pendingPostFlushCbs)];
+        pendingPostFlushCbs.length = 0;
+        // #1947 already has active queue, nested flushPostFlushCbs call
+        if (activePostFlushCbs) {
+            activePostFlushCbs.push(...deduped);
+            return;
+        }
+        activePostFlushCbs = deduped;
+        if ((true)) {
+            seen = seen || new Map();
+        }
+        activePostFlushCbs.sort((a, b) => getId(a) - getId(b));
+        for (postFlushIndex = 0; postFlushIndex < activePostFlushCbs.length; postFlushIndex++) {
+            if (( true) &&
+                checkRecursiveUpdates(seen, activePostFlushCbs[postFlushIndex])) {
+                continue;
+            }
+            activePostFlushCbs[postFlushIndex]();
+        }
+        activePostFlushCbs = null;
+        postFlushIndex = 0;
+    }
+}
+const getId = (job) => job.id == null ? Infinity : job.id;
+function flushJobs(seen) {
+    isFlushPending = false;
+    isFlushing = true;
+    if ((true)) {
+        seen = seen || new Map();
+    }
+    flushPreFlushCbs(seen);
+    // Sort queue before flush.
+    // This ensures that:
+    // 1. Components are updated from parent to child. (because parent is always
+    //    created before the child so its render effect will have smaller
+    //    priority number)
+    // 2. If a component is unmounted during a parent component's update,
+    //    its update can be skipped.
+    queue.sort((a, b) => getId(a) - getId(b));
+    // conditional usage of checkRecursiveUpdate must be determined out of
+    // try ... catch block since Rollup by default de-optimizes treeshaking
+    // inside try-catch. This can leave all warning code unshaked. Although
+    // they would get eventually shaken by a minifier like terser, some minifiers
+    // would fail to do that (e.g. https://github.com/evanw/esbuild/issues/1610)
+    const check = ( true)
+        ? (job) => checkRecursiveUpdates(seen, job)
+        : 0;
+    try {
+        for (flushIndex = 0; flushIndex < queue.length; flushIndex++) {
+            const job = queue[flushIndex];
+            if (job && job.active !== false) {
+                if (( true) && check(job)) {
+                    continue;
+                }
+                // console.log(`running:`, job.id)
+                callWithErrorHandling(job, null, 14 /* SCHEDULER */);
+            }
+        }
+    }
+    finally {
+        flushIndex = 0;
+        queue.length = 0;
+        flushPostFlushCbs(seen);
+        isFlushing = false;
+        currentFlushPromise = null;
+        // some postFlushCb queued jobs!
+        // keep flushing until it drains.
+        if (queue.length ||
+            pendingPreFlushCbs.length ||
+            pendingPostFlushCbs.length) {
+            flushJobs(seen);
+        }
+    }
+}
+function checkRecursiveUpdates(seen, fn) {
+    if (!seen.has(fn)) {
+        seen.set(fn, 1);
+    }
+    else {
+        const count = seen.get(fn);
+        if (count > RECURSION_LIMIT) {
+            const instance = fn.ownerInstance;
+            const componentName = instance && getComponentName(instance.type);
+            warn(`Maximum recursive updates exceeded${componentName ? ` in component <${componentName}>` : ``}. ` +
+                `This means you have a reactive effect that is mutating its own ` +
+                `dependencies and thus recursively triggering itself. Possible sources ` +
+                `include component template, render function, updated hook or ` +
+                `watcher source function.`);
+            return true;
+        }
+        else {
+            seen.set(fn, count + 1);
+        }
+    }
+}
 
 /* eslint-disable no-restricted-globals */
 let isHmrUpdating = false;
@@ -8211,7 +8652,7 @@ function inject(key, defaultValue, treatDefaultAsFactory = false) {
     if (instance) {
         // #2400
         // to support `app.use` plugins,
-        // fallback to appContext's `provides` if the intance is at root
+        // fallback to appContext's `provides` if the instance is at root
         const provides = instance.parent == null
             ? instance.vnode.appContext && instance.vnode.appContext.provides
             : instance.parent.provides;
@@ -8231,6 +8672,274 @@ function inject(key, defaultValue, treatDefaultAsFactory = false) {
     else if ((true)) {
         warn(`inject() can only be used inside setup() or functional components.`);
     }
+}
+
+// Simple effect.
+function watchEffect(effect, options) {
+    return doWatch(effect, null, options);
+}
+function watchPostEffect(effect, options) {
+    return doWatch(effect, null, (( true)
+        ? Object.assign(options || {}, { flush: 'post' })
+        : 0));
+}
+function watchSyncEffect(effect, options) {
+    return doWatch(effect, null, (( true)
+        ? Object.assign(options || {}, { flush: 'sync' })
+        : 0));
+}
+// initial value for watchers to trigger on undefined initial values
+const INITIAL_WATCHER_VALUE = {};
+// implementation
+function watch(source, cb, options) {
+    if (( true) && !(0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isFunction)(cb)) {
+        warn(`\`watch(fn, options?)\` signature has been moved to a separate API. ` +
+            `Use \`watchEffect(fn, options?)\` instead. \`watch\` now only ` +
+            `supports \`watch(source, cb, options?) signature.`);
+    }
+    return doWatch(source, cb, options);
+}
+function doWatch(source, cb, { immediate, deep, flush, onTrack, onTrigger } = _vue_shared__WEBPACK_IMPORTED_MODULE_1__.EMPTY_OBJ) {
+    if (( true) && !cb) {
+        if (immediate !== undefined) {
+            warn(`watch() "immediate" option is only respected when using the ` +
+                `watch(source, callback, options?) signature.`);
+        }
+        if (deep !== undefined) {
+            warn(`watch() "deep" option is only respected when using the ` +
+                `watch(source, callback, options?) signature.`);
+        }
+    }
+    const warnInvalidSource = (s) => {
+        warn(`Invalid watch source: `, s, `A watch source can only be a getter/effect function, a ref, ` +
+            `a reactive object, or an array of these types.`);
+    };
+    const instance = currentInstance;
+    let getter;
+    let forceTrigger = false;
+    let isMultiSource = false;
+    if ((0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.isRef)(source)) {
+        getter = () => source.value;
+        forceTrigger = (0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.isShallow)(source);
+    }
+    else if ((0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.isReactive)(source)) {
+        getter = () => source;
+        deep = true;
+    }
+    else if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isArray)(source)) {
+        isMultiSource = true;
+        forceTrigger = source.some(_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.isReactive);
+        getter = () => source.map(s => {
+            if ((0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.isRef)(s)) {
+                return s.value;
+            }
+            else if ((0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.isReactive)(s)) {
+                return traverse(s);
+            }
+            else if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isFunction)(s)) {
+                return callWithErrorHandling(s, instance, 2 /* WATCH_GETTER */);
+            }
+            else {
+                ( true) && warnInvalidSource(s);
+            }
+        });
+    }
+    else if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isFunction)(source)) {
+        if (cb) {
+            // getter with cb
+            getter = () => callWithErrorHandling(source, instance, 2 /* WATCH_GETTER */);
+        }
+        else {
+            // no cb -> simple effect
+            getter = () => {
+                if (instance && instance.isUnmounted) {
+                    return;
+                }
+                if (cleanup) {
+                    cleanup();
+                }
+                return callWithAsyncErrorHandling(source, instance, 3 /* WATCH_CALLBACK */, [onCleanup]);
+            };
+        }
+    }
+    else {
+        getter = _vue_shared__WEBPACK_IMPORTED_MODULE_1__.NOOP;
+        ( true) && warnInvalidSource(source);
+    }
+    if (cb && deep) {
+        const baseGetter = getter;
+        getter = () => traverse(baseGetter());
+    }
+    let cleanup;
+    let onCleanup = (fn) => {
+        cleanup = effect.onStop = () => {
+            callWithErrorHandling(fn, instance, 4 /* WATCH_CLEANUP */);
+        };
+    };
+    // in SSR there is no need to setup an actual effect, and it should be noop
+    // unless it's eager
+    if (isInSSRComponentSetup) {
+        // we will also not call the invalidate callback (+ runner is not set up)
+        onCleanup = _vue_shared__WEBPACK_IMPORTED_MODULE_1__.NOOP;
+        if (!cb) {
+            getter();
+        }
+        else if (immediate) {
+            callWithAsyncErrorHandling(cb, instance, 3 /* WATCH_CALLBACK */, [
+                getter(),
+                isMultiSource ? [] : undefined,
+                onCleanup
+            ]);
+        }
+        return _vue_shared__WEBPACK_IMPORTED_MODULE_1__.NOOP;
+    }
+    let oldValue = isMultiSource ? [] : INITIAL_WATCHER_VALUE;
+    const job = () => {
+        if (!effect.active) {
+            return;
+        }
+        if (cb) {
+            // watch(source, cb)
+            const newValue = effect.run();
+            if (deep ||
+                forceTrigger ||
+                (isMultiSource
+                    ? newValue.some((v, i) => (0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.hasChanged)(v, oldValue[i]))
+                    : (0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.hasChanged)(newValue, oldValue)) ||
+                (false  )) {
+                // cleanup before running cb again
+                if (cleanup) {
+                    cleanup();
+                }
+                callWithAsyncErrorHandling(cb, instance, 3 /* WATCH_CALLBACK */, [
+                    newValue,
+                    // pass undefined as the old value when it's changed for the first time
+                    oldValue === INITIAL_WATCHER_VALUE ? undefined : oldValue,
+                    onCleanup
+                ]);
+                oldValue = newValue;
+            }
+        }
+        else {
+            // watchEffect
+            effect.run();
+        }
+    };
+    // important: mark the job as a watcher callback so that scheduler knows
+    // it is allowed to self-trigger (#1727)
+    job.allowRecurse = !!cb;
+    let scheduler;
+    if (flush === 'sync') {
+        scheduler = job; // the scheduler function gets called directly
+    }
+    else if (flush === 'post') {
+        scheduler = () => queuePostRenderEffect(job, instance && instance.suspense);
+    }
+    else {
+        // default: 'pre'
+        scheduler = () => {
+            if (!instance || instance.isMounted) {
+                queuePreFlushCb(job);
+            }
+            else {
+                // with 'pre' option, the first call must happen before
+                // the component is mounted so it is called synchronously.
+                job();
+            }
+        };
+    }
+    const effect = new _vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.ReactiveEffect(getter, scheduler);
+    if ((true)) {
+        effect.onTrack = onTrack;
+        effect.onTrigger = onTrigger;
+    }
+    // initial run
+    if (cb) {
+        if (immediate) {
+            job();
+        }
+        else {
+            oldValue = effect.run();
+        }
+    }
+    else if (flush === 'post') {
+        queuePostRenderEffect(effect.run.bind(effect), instance && instance.suspense);
+    }
+    else {
+        effect.run();
+    }
+    return () => {
+        effect.stop();
+        if (instance && instance.scope) {
+            (0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.remove)(instance.scope.effects, effect);
+        }
+    };
+}
+// this.$watch
+function instanceWatch(source, value, options) {
+    const publicThis = this.proxy;
+    const getter = (0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isString)(source)
+        ? source.includes('.')
+            ? createPathGetter(publicThis, source)
+            : () => publicThis[source]
+        : source.bind(publicThis, publicThis);
+    let cb;
+    if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isFunction)(value)) {
+        cb = value;
+    }
+    else {
+        cb = value.handler;
+        options = value;
+    }
+    const cur = currentInstance;
+    setCurrentInstance(this);
+    const res = doWatch(getter, cb.bind(publicThis), options);
+    if (cur) {
+        setCurrentInstance(cur);
+    }
+    else {
+        unsetCurrentInstance();
+    }
+    return res;
+}
+function createPathGetter(ctx, path) {
+    const segments = path.split('.');
+    return () => {
+        let cur = ctx;
+        for (let i = 0; i < segments.length && cur; i++) {
+            cur = cur[segments[i]];
+        }
+        return cur;
+    };
+}
+function traverse(value, seen) {
+    if (!(0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isObject)(value) || value["__v_skip" /* SKIP */]) {
+        return value;
+    }
+    seen = seen || new Set();
+    if (seen.has(value)) {
+        return value;
+    }
+    seen.add(value);
+    if ((0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.isRef)(value)) {
+        traverse(value.value, seen);
+    }
+    else if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isArray)(value)) {
+        for (let i = 0; i < value.length; i++) {
+            traverse(value[i], seen);
+        }
+    }
+    else if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isSet)(value) || (0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isMap)(value)) {
+        value.forEach((v) => {
+            traverse(v, seen);
+        });
+    }
+    else if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isPlainObject)(value)) {
+        for (const key in value) {
+            traverse(value[key], seen);
+        }
+    }
+    return value;
 }
 
 function useTransitionState() {
@@ -8765,7 +9474,7 @@ const KeepAliveImpl = {
         function unmount(vnode) {
             // reset the shapeFlag so it can be properly unmounted
             resetShapeFlag(vnode);
-            _unmount(vnode, instance, parentSuspense);
+            _unmount(vnode, instance, parentSuspense, true);
         }
         function pruneCache(filter) {
             cache.forEach((vnode, key) => {
@@ -8904,7 +9613,7 @@ function matches(pattern, name) {
         return pattern.some((p) => matches(p, name));
     }
     else if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isString)(pattern)) {
-        return pattern.split(',').indexOf(name) > -1;
+        return pattern.split(',').includes(name);
     }
     else if (pattern.test) {
         return pattern.test(name);
@@ -9159,7 +9868,7 @@ function applyOptions(instance) {
                         warn(`Write operation failed: computed property "${key}" is readonly.`);
                     }
                     : 0;
-            const c = (0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.computed)({
+            const c = computed({
                 get,
                 set
             });
@@ -9560,7 +10269,9 @@ function updateProps(instance, rawProps, rawPrevProps, optimized) {
         // attrs point to the same object so it should already have been updated.
         if (attrs !== rawCurrentProps) {
             for (const key in attrs) {
-                if (!rawProps || !(0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.hasOwn)(rawProps, key)) {
+                if (!rawProps ||
+                    (!(0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.hasOwn)(rawProps, key) &&
+                        (!false ))) {
                     delete attrs[key];
                     hasAttrsChanged = true;
                 }
@@ -10662,6 +11373,7 @@ function createHydrationFunctions(rendererInternals) {
     return [hydrate, hydrateNode];
 }
 
+/* eslint-disable no-restricted-globals */
 let supported;
 let perf;
 function startMeasure(instance, type) {
@@ -10689,7 +11401,6 @@ function isSupported() {
     if (supported !== undefined) {
         return supported;
     }
-    /* eslint-disable no-restricted-globals */
     if (typeof window !== 'undefined' && window.performance) {
         supported = true;
         perf = window.performance;
@@ -10697,7 +11408,6 @@ function isSupported() {
     else {
         supported = false;
     }
-    /* eslint-enable no-restricted-globals */
     return supported;
 }
 
@@ -10838,7 +11548,7 @@ function baseCreateRenderer(options, createHydrationFns) {
         }
     };
     const mountStaticNode = (n2, container, anchor, isSVG) => {
-        [n2.el, n2.anchor] = hostInsertStaticContent(n2.children, container, anchor, isSVG);
+        [n2.el, n2.anchor] = hostInsertStaticContent(n2.children, container, anchor, isSVG, n2.el, n2.anchor);
     };
     /**
      * Dev / HMR only
@@ -12606,7 +13316,7 @@ function cloneVNode(vnode, extraProps, mergeRef = false) {
         shapeFlag: vnode.shapeFlag,
         // if the vnode is cloned with extra props, we can no longer assume its
         // existing patch flag to be reliable and need to add the FULL_PROPS flag.
-        // note: perserve flag for fragments since they use the flag for children
+        // note: preserve flag for fragments since they use the flag for children
         // fast paths only.
         patchFlag: extraProps && vnode.type !== Fragment
             ? patchFlag === -1 // hoisted node
@@ -12768,7 +13478,8 @@ function mergeProps(...args) {
             else if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isOn)(key)) {
                 const existing = ret[key];
                 const incoming = toMerge[key];
-                if (existing !== incoming &&
+                if (incoming &&
+                    existing !== incoming &&
                     !((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isArray)(existing) && existing.includes(incoming))) {
                     ret[key] = existing
                         ? [].concat(existing, incoming)
@@ -13426,7 +14137,7 @@ function finishComponentSetup(instance, isSSR, skipOptions) {
     // template / render function normalization
     // could be already set when returned from setup()
     if (!instance.render) {
-        // only do on-the-fly compile if not in SSR - SSR on-the-fly compliation
+        // only do on-the-fly compile if not in SSR - SSR on-the-fly compilation
         // is done by server-renderer
         if (!isSSR && compile && !Component.render) {
             const template = Component.template;
@@ -13572,699 +14283,10 @@ function isClassComponent(value) {
     return (0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isFunction)(value) && '__vccOpts' in value;
 }
 
-const stack = [];
-function pushWarningContext(vnode) {
-    stack.push(vnode);
-}
-function popWarningContext() {
-    stack.pop();
-}
-function warn(msg, ...args) {
-    // avoid props formatting or warn handler tracking deps that might be mutated
-    // during patch, leading to infinite recursion.
-    (0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.pauseTracking)();
-    const instance = stack.length ? stack[stack.length - 1].component : null;
-    const appWarnHandler = instance && instance.appContext.config.warnHandler;
-    const trace = getComponentTrace();
-    if (appWarnHandler) {
-        callWithErrorHandling(appWarnHandler, instance, 11 /* APP_WARN_HANDLER */, [
-            msg + args.join(''),
-            instance && instance.proxy,
-            trace
-                .map(({ vnode }) => `at <${formatComponentName(instance, vnode.type)}>`)
-                .join('\n'),
-            trace
-        ]);
-    }
-    else {
-        const warnArgs = [`[Vue warn]: ${msg}`, ...args];
-        /* istanbul ignore if */
-        if (trace.length &&
-            // avoid spamming console during tests
-            !false) {
-            warnArgs.push(`\n`, ...formatTrace(trace));
-        }
-        console.warn(...warnArgs);
-    }
-    (0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.resetTracking)();
-}
-function getComponentTrace() {
-    let currentVNode = stack[stack.length - 1];
-    if (!currentVNode) {
-        return [];
-    }
-    // we can't just use the stack because it will be incomplete during updates
-    // that did not start from the root. Re-construct the parent chain using
-    // instance parent pointers.
-    const normalizedStack = [];
-    while (currentVNode) {
-        const last = normalizedStack[0];
-        if (last && last.vnode === currentVNode) {
-            last.recurseCount++;
-        }
-        else {
-            normalizedStack.push({
-                vnode: currentVNode,
-                recurseCount: 0
-            });
-        }
-        const parentInstance = currentVNode.component && currentVNode.component.parent;
-        currentVNode = parentInstance && parentInstance.vnode;
-    }
-    return normalizedStack;
-}
-/* istanbul ignore next */
-function formatTrace(trace) {
-    const logs = [];
-    trace.forEach((entry, i) => {
-        logs.push(...(i === 0 ? [] : [`\n`]), ...formatTraceEntry(entry));
-    });
-    return logs;
-}
-function formatTraceEntry({ vnode, recurseCount }) {
-    const postfix = recurseCount > 0 ? `... (${recurseCount} recursive calls)` : ``;
-    const isRoot = vnode.component ? vnode.component.parent == null : false;
-    const open = ` at <${formatComponentName(vnode.component, vnode.type, isRoot)}`;
-    const close = `>` + postfix;
-    return vnode.props
-        ? [open, ...formatProps(vnode.props), close]
-        : [open + close];
-}
-/* istanbul ignore next */
-function formatProps(props) {
-    const res = [];
-    const keys = Object.keys(props);
-    keys.slice(0, 3).forEach(key => {
-        res.push(...formatProp(key, props[key]));
-    });
-    if (keys.length > 3) {
-        res.push(` ...`);
-    }
-    return res;
-}
-/* istanbul ignore next */
-function formatProp(key, value, raw) {
-    if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isString)(value)) {
-        value = JSON.stringify(value);
-        return raw ? value : [`${key}=${value}`];
-    }
-    else if (typeof value === 'number' ||
-        typeof value === 'boolean' ||
-        value == null) {
-        return raw ? value : [`${key}=${value}`];
-    }
-    else if ((0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.isRef)(value)) {
-        value = formatProp(key, (0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.toRaw)(value.value), true);
-        return raw ? value : [`${key}=Ref<`, value, `>`];
-    }
-    else if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isFunction)(value)) {
-        return [`${key}=fn${value.name ? `<${value.name}>` : ``}`];
-    }
-    else {
-        value = (0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.toRaw)(value);
-        return raw ? value : [`${key}=`, value];
-    }
-}
-
-const ErrorTypeStrings = {
-    ["sp" /* SERVER_PREFETCH */]: 'serverPrefetch hook',
-    ["bc" /* BEFORE_CREATE */]: 'beforeCreate hook',
-    ["c" /* CREATED */]: 'created hook',
-    ["bm" /* BEFORE_MOUNT */]: 'beforeMount hook',
-    ["m" /* MOUNTED */]: 'mounted hook',
-    ["bu" /* BEFORE_UPDATE */]: 'beforeUpdate hook',
-    ["u" /* UPDATED */]: 'updated',
-    ["bum" /* BEFORE_UNMOUNT */]: 'beforeUnmount hook',
-    ["um" /* UNMOUNTED */]: 'unmounted hook',
-    ["a" /* ACTIVATED */]: 'activated hook',
-    ["da" /* DEACTIVATED */]: 'deactivated hook',
-    ["ec" /* ERROR_CAPTURED */]: 'errorCaptured hook',
-    ["rtc" /* RENDER_TRACKED */]: 'renderTracked hook',
-    ["rtg" /* RENDER_TRIGGERED */]: 'renderTriggered hook',
-    [0 /* SETUP_FUNCTION */]: 'setup function',
-    [1 /* RENDER_FUNCTION */]: 'render function',
-    [2 /* WATCH_GETTER */]: 'watcher getter',
-    [3 /* WATCH_CALLBACK */]: 'watcher callback',
-    [4 /* WATCH_CLEANUP */]: 'watcher cleanup function',
-    [5 /* NATIVE_EVENT_HANDLER */]: 'native event handler',
-    [6 /* COMPONENT_EVENT_HANDLER */]: 'component event handler',
-    [7 /* VNODE_HOOK */]: 'vnode hook',
-    [8 /* DIRECTIVE_HOOK */]: 'directive hook',
-    [9 /* TRANSITION_HOOK */]: 'transition hook',
-    [10 /* APP_ERROR_HANDLER */]: 'app errorHandler',
-    [11 /* APP_WARN_HANDLER */]: 'app warnHandler',
-    [12 /* FUNCTION_REF */]: 'ref function',
-    [13 /* ASYNC_COMPONENT_LOADER */]: 'async component loader',
-    [14 /* SCHEDULER */]: 'scheduler flush. This is likely a Vue internals bug. ' +
-        'Please open an issue at https://new-issue.vuejs.org/?repo=vuejs/vue-next'
-};
-function callWithErrorHandling(fn, instance, type, args) {
-    let res;
-    try {
-        res = args ? fn(...args) : fn();
-    }
-    catch (err) {
-        handleError(err, instance, type);
-    }
-    return res;
-}
-function callWithAsyncErrorHandling(fn, instance, type, args) {
-    if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isFunction)(fn)) {
-        const res = callWithErrorHandling(fn, instance, type, args);
-        if (res && (0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isPromise)(res)) {
-            res.catch(err => {
-                handleError(err, instance, type);
-            });
-        }
-        return res;
-    }
-    const values = [];
-    for (let i = 0; i < fn.length; i++) {
-        values.push(callWithAsyncErrorHandling(fn[i], instance, type, args));
-    }
-    return values;
-}
-function handleError(err, instance, type, throwInDev = true) {
-    const contextVNode = instance ? instance.vnode : null;
-    if (instance) {
-        let cur = instance.parent;
-        // the exposed instance is the render proxy to keep it consistent with 2.x
-        const exposedInstance = instance.proxy;
-        // in production the hook receives only the error code
-        const errorInfo = ( true) ? ErrorTypeStrings[type] : 0;
-        while (cur) {
-            const errorCapturedHooks = cur.ec;
-            if (errorCapturedHooks) {
-                for (let i = 0; i < errorCapturedHooks.length; i++) {
-                    if (errorCapturedHooks[i](err, exposedInstance, errorInfo) === false) {
-                        return;
-                    }
-                }
-            }
-            cur = cur.parent;
-        }
-        // app-level handling
-        const appErrorHandler = instance.appContext.config.errorHandler;
-        if (appErrorHandler) {
-            callWithErrorHandling(appErrorHandler, null, 10 /* APP_ERROR_HANDLER */, [err, exposedInstance, errorInfo]);
-            return;
-        }
-    }
-    logError(err, type, contextVNode, throwInDev);
-}
-function logError(err, type, contextVNode, throwInDev = true) {
-    if ((true)) {
-        const info = ErrorTypeStrings[type];
-        if (contextVNode) {
-            pushWarningContext(contextVNode);
-        }
-        warn(`Unhandled error${info ? ` during execution of ${info}` : ``}`);
-        if (contextVNode) {
-            popWarningContext();
-        }
-        // crash in dev by default so it's more noticeable
-        if (throwInDev) {
-            throw err;
-        }
-        else {
-            console.error(err);
-        }
-    }
-    else {}
-}
-
-let isFlushing = false;
-let isFlushPending = false;
-const queue = [];
-let flushIndex = 0;
-const pendingPreFlushCbs = [];
-let activePreFlushCbs = null;
-let preFlushIndex = 0;
-const pendingPostFlushCbs = [];
-let activePostFlushCbs = null;
-let postFlushIndex = 0;
-const resolvedPromise = Promise.resolve();
-let currentFlushPromise = null;
-let currentPreFlushParentJob = null;
-const RECURSION_LIMIT = 100;
-function nextTick(fn) {
-    const p = currentFlushPromise || resolvedPromise;
-    return fn ? p.then(this ? fn.bind(this) : fn) : p;
-}
-// #2768
-// Use binary-search to find a suitable position in the queue,
-// so that the queue maintains the increasing order of job's id,
-// which can prevent the job from being skipped and also can avoid repeated patching.
-function findInsertionIndex(id) {
-    // the start index should be `flushIndex + 1`
-    let start = flushIndex + 1;
-    let end = queue.length;
-    while (start < end) {
-        const middle = (start + end) >>> 1;
-        const middleJobId = getId(queue[middle]);
-        middleJobId < id ? (start = middle + 1) : (end = middle);
-    }
-    return start;
-}
-function queueJob(job) {
-    // the dedupe search uses the startIndex argument of Array.includes()
-    // by default the search index includes the current job that is being run
-    // so it cannot recursively trigger itself again.
-    // if the job is a watch() callback, the search will start with a +1 index to
-    // allow it recursively trigger itself - it is the user's responsibility to
-    // ensure it doesn't end up in an infinite loop.
-    if ((!queue.length ||
-        !queue.includes(job, isFlushing && job.allowRecurse ? flushIndex + 1 : flushIndex)) &&
-        job !== currentPreFlushParentJob) {
-        if (job.id == null) {
-            queue.push(job);
-        }
-        else {
-            queue.splice(findInsertionIndex(job.id), 0, job);
-        }
-        queueFlush();
-    }
-}
-function queueFlush() {
-    if (!isFlushing && !isFlushPending) {
-        isFlushPending = true;
-        currentFlushPromise = resolvedPromise.then(flushJobs);
-    }
-}
-function invalidateJob(job) {
-    const i = queue.indexOf(job);
-    if (i > flushIndex) {
-        queue.splice(i, 1);
-    }
-}
-function queueCb(cb, activeQueue, pendingQueue, index) {
-    if (!(0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isArray)(cb)) {
-        if (!activeQueue ||
-            !activeQueue.includes(cb, cb.allowRecurse ? index + 1 : index)) {
-            pendingQueue.push(cb);
-        }
-    }
-    else {
-        // if cb is an array, it is a component lifecycle hook which can only be
-        // triggered by a job, which is already deduped in the main queue, so
-        // we can skip duplicate check here to improve perf
-        pendingQueue.push(...cb);
-    }
-    queueFlush();
-}
-function queuePreFlushCb(cb) {
-    queueCb(cb, activePreFlushCbs, pendingPreFlushCbs, preFlushIndex);
-}
-function queuePostFlushCb(cb) {
-    queueCb(cb, activePostFlushCbs, pendingPostFlushCbs, postFlushIndex);
-}
-function flushPreFlushCbs(seen, parentJob = null) {
-    if (pendingPreFlushCbs.length) {
-        currentPreFlushParentJob = parentJob;
-        activePreFlushCbs = [...new Set(pendingPreFlushCbs)];
-        pendingPreFlushCbs.length = 0;
-        if ((true)) {
-            seen = seen || new Map();
-        }
-        for (preFlushIndex = 0; preFlushIndex < activePreFlushCbs.length; preFlushIndex++) {
-            if (( true) &&
-                checkRecursiveUpdates(seen, activePreFlushCbs[preFlushIndex])) {
-                continue;
-            }
-            activePreFlushCbs[preFlushIndex]();
-        }
-        activePreFlushCbs = null;
-        preFlushIndex = 0;
-        currentPreFlushParentJob = null;
-        // recursively flush until it drains
-        flushPreFlushCbs(seen, parentJob);
-    }
-}
-function flushPostFlushCbs(seen) {
-    if (pendingPostFlushCbs.length) {
-        const deduped = [...new Set(pendingPostFlushCbs)];
-        pendingPostFlushCbs.length = 0;
-        // #1947 already has active queue, nested flushPostFlushCbs call
-        if (activePostFlushCbs) {
-            activePostFlushCbs.push(...deduped);
-            return;
-        }
-        activePostFlushCbs = deduped;
-        if ((true)) {
-            seen = seen || new Map();
-        }
-        activePostFlushCbs.sort((a, b) => getId(a) - getId(b));
-        for (postFlushIndex = 0; postFlushIndex < activePostFlushCbs.length; postFlushIndex++) {
-            if (( true) &&
-                checkRecursiveUpdates(seen, activePostFlushCbs[postFlushIndex])) {
-                continue;
-            }
-            activePostFlushCbs[postFlushIndex]();
-        }
-        activePostFlushCbs = null;
-        postFlushIndex = 0;
-    }
-}
-const getId = (job) => job.id == null ? Infinity : job.id;
-function flushJobs(seen) {
-    isFlushPending = false;
-    isFlushing = true;
-    if ((true)) {
-        seen = seen || new Map();
-    }
-    flushPreFlushCbs(seen);
-    // Sort queue before flush.
-    // This ensures that:
-    // 1. Components are updated from parent to child. (because parent is always
-    //    created before the child so its render effect will have smaller
-    //    priority number)
-    // 2. If a component is unmounted during a parent component's update,
-    //    its update can be skipped.
-    queue.sort((a, b) => getId(a) - getId(b));
-    // conditional usage of checkRecursiveUpdate must be determined out of
-    // try ... catch block since Rollup by default de-optimizes treeshaking
-    // inside try-catch. This can leave all warning code unshaked. Although
-    // they would get eventually shaken by a minifier like terser, some minifiers
-    // would fail to do that (e.g. https://github.com/evanw/esbuild/issues/1610)
-    const check = ( true)
-        ? (job) => checkRecursiveUpdates(seen, job)
-        : 0;
-    try {
-        for (flushIndex = 0; flushIndex < queue.length; flushIndex++) {
-            const job = queue[flushIndex];
-            if (job && job.active !== false) {
-                if (( true) && check(job)) {
-                    continue;
-                }
-                // console.log(`running:`, job.id)
-                callWithErrorHandling(job, null, 14 /* SCHEDULER */);
-            }
-        }
-    }
-    finally {
-        flushIndex = 0;
-        queue.length = 0;
-        flushPostFlushCbs(seen);
-        isFlushing = false;
-        currentFlushPromise = null;
-        // some postFlushCb queued jobs!
-        // keep flushing until it drains.
-        if (queue.length ||
-            pendingPreFlushCbs.length ||
-            pendingPostFlushCbs.length) {
-            flushJobs(seen);
-        }
-    }
-}
-function checkRecursiveUpdates(seen, fn) {
-    if (!seen.has(fn)) {
-        seen.set(fn, 1);
-    }
-    else {
-        const count = seen.get(fn);
-        if (count > RECURSION_LIMIT) {
-            const instance = fn.ownerInstance;
-            const componentName = instance && getComponentName(instance.type);
-            warn(`Maximum recursive updates exceeded${componentName ? ` in component <${componentName}>` : ``}. ` +
-                `This means you have a reactive effect that is mutating its own ` +
-                `dependencies and thus recursively triggering itself. Possible sources ` +
-                `include component template, render function, updated hook or ` +
-                `watcher source function.`);
-            return true;
-        }
-        else {
-            seen.set(fn, count + 1);
-        }
-    }
-}
-
-// Simple effect.
-function watchEffect(effect, options) {
-    return doWatch(effect, null, options);
-}
-function watchPostEffect(effect, options) {
-    return doWatch(effect, null, (( true)
-        ? Object.assign(options || {}, { flush: 'post' })
-        : 0));
-}
-function watchSyncEffect(effect, options) {
-    return doWatch(effect, null, (( true)
-        ? Object.assign(options || {}, { flush: 'sync' })
-        : 0));
-}
-// initial value for watchers to trigger on undefined initial values
-const INITIAL_WATCHER_VALUE = {};
-// implementation
-function watch(source, cb, options) {
-    if (( true) && !(0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isFunction)(cb)) {
-        warn(`\`watch(fn, options?)\` signature has been moved to a separate API. ` +
-            `Use \`watchEffect(fn, options?)\` instead. \`watch\` now only ` +
-            `supports \`watch(source, cb, options?) signature.`);
-    }
-    return doWatch(source, cb, options);
-}
-function doWatch(source, cb, { immediate, deep, flush, onTrack, onTrigger } = _vue_shared__WEBPACK_IMPORTED_MODULE_1__.EMPTY_OBJ) {
-    if (( true) && !cb) {
-        if (immediate !== undefined) {
-            warn(`watch() "immediate" option is only respected when using the ` +
-                `watch(source, callback, options?) signature.`);
-        }
-        if (deep !== undefined) {
-            warn(`watch() "deep" option is only respected when using the ` +
-                `watch(source, callback, options?) signature.`);
-        }
-    }
-    const warnInvalidSource = (s) => {
-        warn(`Invalid watch source: `, s, `A watch source can only be a getter/effect function, a ref, ` +
-            `a reactive object, or an array of these types.`);
-    };
-    const instance = currentInstance;
-    let getter;
-    let forceTrigger = false;
-    let isMultiSource = false;
-    if ((0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.isRef)(source)) {
-        getter = () => source.value;
-        forceTrigger = !!source._shallow;
-    }
-    else if ((0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.isReactive)(source)) {
-        getter = () => source;
-        deep = true;
-    }
-    else if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isArray)(source)) {
-        isMultiSource = true;
-        forceTrigger = source.some(_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.isReactive);
-        getter = () => source.map(s => {
-            if ((0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.isRef)(s)) {
-                return s.value;
-            }
-            else if ((0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.isReactive)(s)) {
-                return traverse(s);
-            }
-            else if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isFunction)(s)) {
-                return callWithErrorHandling(s, instance, 2 /* WATCH_GETTER */);
-            }
-            else {
-                ( true) && warnInvalidSource(s);
-            }
-        });
-    }
-    else if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isFunction)(source)) {
-        if (cb) {
-            // getter with cb
-            getter = () => callWithErrorHandling(source, instance, 2 /* WATCH_GETTER */);
-        }
-        else {
-            // no cb -> simple effect
-            getter = () => {
-                if (instance && instance.isUnmounted) {
-                    return;
-                }
-                if (cleanup) {
-                    cleanup();
-                }
-                return callWithAsyncErrorHandling(source, instance, 3 /* WATCH_CALLBACK */, [onInvalidate]);
-            };
-        }
-    }
-    else {
-        getter = _vue_shared__WEBPACK_IMPORTED_MODULE_1__.NOOP;
-        ( true) && warnInvalidSource(source);
-    }
-    if (cb && deep) {
-        const baseGetter = getter;
-        getter = () => traverse(baseGetter());
-    }
-    let cleanup;
-    let onInvalidate = (fn) => {
-        cleanup = effect.onStop = () => {
-            callWithErrorHandling(fn, instance, 4 /* WATCH_CLEANUP */);
-        };
-    };
-    // in SSR there is no need to setup an actual effect, and it should be noop
-    // unless it's eager
-    if (isInSSRComponentSetup) {
-        // we will also not call the invalidate callback (+ runner is not set up)
-        onInvalidate = _vue_shared__WEBPACK_IMPORTED_MODULE_1__.NOOP;
-        if (!cb) {
-            getter();
-        }
-        else if (immediate) {
-            callWithAsyncErrorHandling(cb, instance, 3 /* WATCH_CALLBACK */, [
-                getter(),
-                isMultiSource ? [] : undefined,
-                onInvalidate
-            ]);
-        }
-        return _vue_shared__WEBPACK_IMPORTED_MODULE_1__.NOOP;
-    }
-    let oldValue = isMultiSource ? [] : INITIAL_WATCHER_VALUE;
-    const job = () => {
-        if (!effect.active) {
-            return;
-        }
-        if (cb) {
-            // watch(source, cb)
-            const newValue = effect.run();
-            if (deep ||
-                forceTrigger ||
-                (isMultiSource
-                    ? newValue.some((v, i) => (0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.hasChanged)(v, oldValue[i]))
-                    : (0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.hasChanged)(newValue, oldValue)) ||
-                (false  )) {
-                // cleanup before running cb again
-                if (cleanup) {
-                    cleanup();
-                }
-                callWithAsyncErrorHandling(cb, instance, 3 /* WATCH_CALLBACK */, [
-                    newValue,
-                    // pass undefined as the old value when it's changed for the first time
-                    oldValue === INITIAL_WATCHER_VALUE ? undefined : oldValue,
-                    onInvalidate
-                ]);
-                oldValue = newValue;
-            }
-        }
-        else {
-            // watchEffect
-            effect.run();
-        }
-    };
-    // important: mark the job as a watcher callback so that scheduler knows
-    // it is allowed to self-trigger (#1727)
-    job.allowRecurse = !!cb;
-    let scheduler;
-    if (flush === 'sync') {
-        scheduler = job; // the scheduler function gets called directly
-    }
-    else if (flush === 'post') {
-        scheduler = () => queuePostRenderEffect(job, instance && instance.suspense);
-    }
-    else {
-        // default: 'pre'
-        scheduler = () => {
-            if (!instance || instance.isMounted) {
-                queuePreFlushCb(job);
-            }
-            else {
-                // with 'pre' option, the first call must happen before
-                // the component is mounted so it is called synchronously.
-                job();
-            }
-        };
-    }
-    const effect = new _vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.ReactiveEffect(getter, scheduler);
-    if ((true)) {
-        effect.onTrack = onTrack;
-        effect.onTrigger = onTrigger;
-    }
-    // initial run
-    if (cb) {
-        if (immediate) {
-            job();
-        }
-        else {
-            oldValue = effect.run();
-        }
-    }
-    else if (flush === 'post') {
-        queuePostRenderEffect(effect.run.bind(effect), instance && instance.suspense);
-    }
-    else {
-        effect.run();
-    }
-    return () => {
-        effect.stop();
-        if (instance && instance.scope) {
-            (0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.remove)(instance.scope.effects, effect);
-        }
-    };
-}
-// this.$watch
-function instanceWatch(source, value, options) {
-    const publicThis = this.proxy;
-    const getter = (0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isString)(source)
-        ? source.includes('.')
-            ? createPathGetter(publicThis, source)
-            : () => publicThis[source]
-        : source.bind(publicThis, publicThis);
-    let cb;
-    if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isFunction)(value)) {
-        cb = value;
-    }
-    else {
-        cb = value.handler;
-        options = value;
-    }
-    const cur = currentInstance;
-    setCurrentInstance(this);
-    const res = doWatch(getter, cb.bind(publicThis), options);
-    if (cur) {
-        setCurrentInstance(cur);
-    }
-    else {
-        unsetCurrentInstance();
-    }
-    return res;
-}
-function createPathGetter(ctx, path) {
-    const segments = path.split('.');
-    return () => {
-        let cur = ctx;
-        for (let i = 0; i < segments.length && cur; i++) {
-            cur = cur[segments[i]];
-        }
-        return cur;
-    };
-}
-function traverse(value, seen) {
-    if (!(0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isObject)(value) || value["__v_skip" /* SKIP */]) {
-        return value;
-    }
-    seen = seen || new Set();
-    if (seen.has(value)) {
-        return value;
-    }
-    seen.add(value);
-    if ((0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.isRef)(value)) {
-        traverse(value.value, seen);
-    }
-    else if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isArray)(value)) {
-        for (let i = 0; i < value.length; i++) {
-            traverse(value[i], seen);
-        }
-    }
-    else if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isSet)(value) || (0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isMap)(value)) {
-        value.forEach((v) => {
-            traverse(v, seen);
-        });
-    }
-    else if ((0,_vue_shared__WEBPACK_IMPORTED_MODULE_1__.isPlainObject)(value)) {
-        for (const key in value) {
-            traverse(value[key], seen);
-        }
-    }
-    return value;
-}
+const computed = ((getterOrOptions, debugOptions) => {
+    // @ts-ignore
+    return (0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.computed)(getterOrOptions, debugOptions, isInSSRComponentSetup);
+});
 
 // dev only
 const warnRuntimeUsage = (method) => warn(`${method}() is a compiler-hint helper that is only usable inside ` +
@@ -14289,7 +14311,7 @@ function defineEmits() {
  * instance properties when it is accessed by a parent component via template
  * refs.
  *
- * `<script setup>` components are closed by default - i.e. varaibles inside
+ * `<script setup>` components are closed by default - i.e. variables inside
  * the `<script setup>` scope is not exposed to parent unless explicitly exposed
  * via `defineExpose`.
  *
@@ -14458,6 +14480,10 @@ const useSSRContext = () => {
     }
 };
 
+function isShallow(value) {
+    return !!(value && value["__v_isShallow" /* IS_SHALLOW */]);
+}
+
 function initCustomFormatter() {
     /* eslint-disable no-restricted-globals */
     if ( false || typeof window === 'undefined') {
@@ -14492,7 +14518,7 @@ function initCustomFormatter() {
                 return [
                     'div',
                     {},
-                    ['span', vueStyle, 'Reactive'],
+                    ['span', vueStyle, isShallow(obj) ? 'ShallowReactive' : 'Reactive'],
                     '<',
                     formatValue(obj),
                     `>${(0,_vue_reactivity__WEBPACK_IMPORTED_MODULE_0__.isReadonly)(obj) ? ` (readonly)` : ``}`
@@ -14502,7 +14528,7 @@ function initCustomFormatter() {
                 return [
                     'div',
                     {},
-                    ['span', vueStyle, 'Readonly'],
+                    ['span', vueStyle, isShallow(obj) ? 'ShallowReadonly' : 'Readonly'],
                     '<',
                     formatValue(obj),
                     '>'
@@ -14631,7 +14657,7 @@ function initCustomFormatter() {
         }
     }
     function genRefFlag(v) {
-        if (v._shallow) {
+        if (isShallow(v)) {
             return `ShallowRef`;
         }
         if (v.effect) {
@@ -14675,7 +14701,7 @@ function isMemoSame(cached, memo) {
 }
 
 // Core API ------------------------------------------------------------------
-const version = "3.2.26";
+const version = "3.2.28";
 const _ssrUtils = {
     createComponentInstance,
     setupComponent,
@@ -14763,6 +14789,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   "isReadonly": () => (/* reexport safe */ _vue_runtime_core__WEBPACK_IMPORTED_MODULE_0__.isReadonly),
 /* harmony export */   "isRef": () => (/* reexport safe */ _vue_runtime_core__WEBPACK_IMPORTED_MODULE_0__.isRef),
 /* harmony export */   "isRuntimeOnly": () => (/* reexport safe */ _vue_runtime_core__WEBPACK_IMPORTED_MODULE_0__.isRuntimeOnly),
+/* harmony export */   "isShallow": () => (/* reexport safe */ _vue_runtime_core__WEBPACK_IMPORTED_MODULE_0__.isShallow),
 /* harmony export */   "isVNode": () => (/* reexport safe */ _vue_runtime_core__WEBPACK_IMPORTED_MODULE_0__.isVNode),
 /* harmony export */   "markRaw": () => (/* reexport safe */ _vue_runtime_core__WEBPACK_IMPORTED_MODULE_0__.markRaw),
 /* harmony export */   "mergeDefaults": () => (/* reexport safe */ _vue_runtime_core__WEBPACK_IMPORTED_MODULE_0__.mergeDefaults),
@@ -14865,7 +14892,7 @@ __webpack_require__.r(__webpack_exports__);
 
 const svgNS = 'http://www.w3.org/2000/svg';
 const doc = (typeof document !== 'undefined' ? document : null);
-const staticTemplateCache = new Map();
+const templateContainer = doc && doc.createElement('template');
 const nodeOps = {
     insert: (child, parent, anchor) => {
         parent.insertBefore(child, anchor || null);
@@ -14919,14 +14946,21 @@ const nodeOps = {
     // Reason: innerHTML.
     // Static content here can only come from compiled templates.
     // As long as the user only uses trusted templates, this is safe.
-    insertStaticContent(content, parent, anchor, isSVG) {
+    insertStaticContent(content, parent, anchor, isSVG, start, end) {
         // <parent> before | first ... last | anchor </parent>
         const before = anchor ? anchor.previousSibling : parent.lastChild;
-        let template = staticTemplateCache.get(content);
-        if (!template) {
-            const t = doc.createElement('template');
-            t.innerHTML = isSVG ? `<svg>${content}</svg>` : content;
-            template = t.content;
+        if (start && end) {
+            // cached
+            while (true) {
+                parent.insertBefore(start.cloneNode(true), anchor);
+                if (start === end || !(start = start.nextSibling))
+                    break;
+            }
+        }
+        else {
+            // fresh insert
+            templateContainer.innerHTML = isSVG ? `<svg>${content}</svg>` : content;
+            const template = templateContainer.content;
             if (isSVG) {
                 // remove outer svg wrapper
                 const wrapper = template.firstChild;
@@ -14935,9 +14969,8 @@ const nodeOps = {
                 }
                 template.removeChild(wrapper);
             }
-            staticTemplateCache.set(content, template);
+            parent.insertBefore(template, anchor);
         }
-        parent.insertBefore(template.cloneNode(true), anchor);
         return [
             // first
             before ? before.nextSibling : parent.firstChild,
@@ -15229,7 +15262,7 @@ function patchStopImmediatePropagation(e, value) {
             originalStop.call(e);
             e._stopped = true;
         };
-        return value.map(fn => (e) => !e._stopped && fn(e));
+        return value.map(fn => (e) => !e._stopped && fn && fn(e));
     }
     else {
         return value;
@@ -16930,8 +16963,20 @@ const SVG_TAGS = 'svg,animate,animateMotion,animateTransform,circle,clipPath,col
     'polygon,polyline,radialGradient,rect,set,solidcolor,stop,switch,symbol,' +
     'text,textPath,title,tspan,unknown,use,view';
 const VOID_TAGS = 'area,base,br,col,embed,hr,img,input,link,meta,param,source,track,wbr';
+/**
+ * Compiler only.
+ * Do NOT use in runtime code paths unless behind `(process.env.NODE_ENV !== 'production')` flag.
+ */
 const isHTMLTag = /*#__PURE__*/ makeMap(HTML_TAGS);
+/**
+ * Compiler only.
+ * Do NOT use in runtime code paths unless behind `(process.env.NODE_ENV !== 'production')` flag.
+ */
 const isSVGTag = /*#__PURE__*/ makeMap(SVG_TAGS);
+/**
+ * Compiler only.
+ * Do NOT use in runtime code paths unless behind `(process.env.NODE_ENV !== 'production')` flag.
+ */
 const isVoidTag = /*#__PURE__*/ makeMap(VOID_TAGS);
 
 const escapeRE = /["'&<>]/;
@@ -21220,6 +21265,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _Jetstream_Input_vue__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! @/Jetstream/Input.vue */ "./resources/js/Jetstream/Input.vue");
 /* harmony import */ var _Jetstream_Label_vue__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! @/Jetstream/Label.vue */ "./resources/js/Jetstream/Label.vue");
 /* harmony import */ var _Jetstream_Checkbox_vue__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! @/Jetstream/Checkbox.vue */ "./resources/js/Jetstream/Checkbox.vue");
+/* harmony import */ var vue_multiselect__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! vue-multiselect */ "./node_modules/vue-multiselect/dist/vue-multiselect.esm.js");
+
 
 
 
@@ -21230,7 +21277,11 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = ({
   props: {
     movie: Object,
-    trailers: Array
+    trailers: Array,
+    casts: Array,
+    tags: Array,
+    movieTags: Array,
+    movieCasts: Array
   },
   setup: function setup(__props, _ref) {
     var expose = _ref.expose;
@@ -21239,6 +21290,12 @@ __webpack_require__.r(__webpack_exports__);
     var form = (0,_inertiajs_inertia_vue3__WEBPACK_IMPORTED_MODULE_1__.useForm)({
       name: "",
       embed_html: ""
+    });
+    var castForm = (0,_inertiajs_inertia_vue3__WEBPACK_IMPORTED_MODULE_1__.useForm)({
+      casts: props.movieCasts
+    });
+    var tagForm = (0,_inertiajs_inertia_vue3__WEBPACK_IMPORTED_MODULE_1__.useForm)({
+      tags: props.movieTags
     });
 
     function submitTrailer() {
@@ -21249,10 +21306,28 @@ __webpack_require__.r(__webpack_exports__);
       });
     }
 
+    function addCast() {
+      castForm.post("/admin/movies/".concat(props.movie.id, "/add-casts"), {
+        preserveState: true,
+        preserveScroll: true
+      });
+    }
+
+    function addTag() {
+      tagForm.post("/admin/movies/".concat(props.movie.id, "/add-tags"), {
+        preserveState: true,
+        preserveScroll: true
+      });
+    }
+
     var __returned__ = {
       props: props,
       form: form,
+      castForm: castForm,
+      tagForm: tagForm,
       submitTrailer: submitTrailer,
+      addCast: addCast,
+      addTag: addTag,
       AdminLayout: _Layouts_AdminLayout_vue__WEBPACK_IMPORTED_MODULE_0__["default"],
       Link: _inertiajs_inertia_vue3__WEBPACK_IMPORTED_MODULE_1__.Link,
       useForm: _inertiajs_inertia_vue3__WEBPACK_IMPORTED_MODULE_1__.useForm,
@@ -21261,7 +21336,8 @@ __webpack_require__.r(__webpack_exports__);
       JetButton: _Jetstream_Button_vue__WEBPACK_IMPORTED_MODULE_3__["default"],
       JetInput: _Jetstream_Input_vue__WEBPACK_IMPORTED_MODULE_4__["default"],
       JetLabel: _Jetstream_Label_vue__WEBPACK_IMPORTED_MODULE_5__["default"],
-      JetCheckbox: _Jetstream_Checkbox_vue__WEBPACK_IMPORTED_MODULE_6__["default"]
+      JetCheckbox: _Jetstream_Checkbox_vue__WEBPACK_IMPORTED_MODULE_6__["default"],
+      Multiselect: vue_multiselect__WEBPACK_IMPORTED_MODULE_7__["default"]
     };
     Object.defineProperty(__returned__, '__isScriptSetup', {
       enumerable: false,
@@ -27548,19 +27624,33 @@ var _hoisted_13 = {
   "class": "flex items-center justify-end mt-4"
 };
 
-var _hoisted_14 = /*#__PURE__*/(0,vue__WEBPACK_IMPORTED_MODULE_0__.createTextVNode)(" Update ");
+var _hoisted_14 = /*#__PURE__*/(0,vue__WEBPACK_IMPORTED_MODULE_0__.createTextVNode)(" add trailer ");
 
-var _hoisted_15 = /*#__PURE__*/(0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("div", {
-  "class": "w-full mb-8 sm:max-w-md p-6 overflow-hidden bg-white rounded-lg shadow-lg"
-}, " Casta Form ", -1
-/* HOISTED */
-);
+var _hoisted_15 = {
+  "class": "w-full mb-8 sm:max-w-md p-6 bg-white rounded-lg shadow-lg"
+};
+var _hoisted_16 = {
+  "class": "flex"
+};
+var _hoisted_17 = ["onSubmit"];
+var _hoisted_18 = {
+  "class": "mt-2"
+};
 
-var _hoisted_16 = /*#__PURE__*/(0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("div", {
-  "class": "w-full mb-8 sm:max-w-md p-6 overflow-hidden bg-white rounded-lg shadow-lg"
-}, " Tags Form ", -1
-/* HOISTED */
-);
+var _hoisted_19 = /*#__PURE__*/(0,vue__WEBPACK_IMPORTED_MODULE_0__.createTextVNode)("add casts");
+
+var _hoisted_20 = {
+  "class": "w-full mb-8 sm:max-w-md p-6 bg-white rounded-lg shadow-lg"
+};
+var _hoisted_21 = {
+  "class": "flex"
+};
+var _hoisted_22 = ["onSubmit"];
+var _hoisted_23 = {
+  "class": "mt-2"
+};
+
+var _hoisted_24 = /*#__PURE__*/(0,vue__WEBPACK_IMPORTED_MODULE_0__.createTextVNode)("add tags");
 
 function render(_ctx, _cache, $props, $setup, $data, $options) {
   return (0,vue__WEBPACK_IMPORTED_MODULE_0__.openBlock)(), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createBlock)($setup["AdminLayout"], {
@@ -27654,7 +27744,77 @@ function render(_ctx, _cache, $props, $setup, $data, $options) {
       /* PROPS */
       , ["class", "disabled"])])], 40
       /* PROPS, HYDRATE_EVENTS */
-      , _hoisted_9)]), _hoisted_15, _hoisted_16])])])];
+      , _hoisted_9)]), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("div", _hoisted_15, [(0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("div", null, [(0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("div", _hoisted_16, [((0,vue__WEBPACK_IMPORTED_MODULE_0__.openBlock)(true), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementBlock)(vue__WEBPACK_IMPORTED_MODULE_0__.Fragment, null, (0,vue__WEBPACK_IMPORTED_MODULE_0__.renderList)($props.movieCasts, function (mc) {
+        return (0,vue__WEBPACK_IMPORTED_MODULE_0__.openBlock)(), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementBlock)("div", {
+          "class": "m-2 p-1 text-xs",
+          key: mc.id
+        }, (0,vue__WEBPACK_IMPORTED_MODULE_0__.toDisplayString)(mc.name), 1
+        /* TEXT */
+        );
+      }), 128
+      /* KEYED_FRAGMENT */
+      ))]), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("form", {
+        onSubmit: (0,vue__WEBPACK_IMPORTED_MODULE_0__.withModifiers)($setup.addCast, ["prevent"])
+      }, [(0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)($setup["Multiselect"], {
+        modelValue: $setup.castForm.casts,
+        "onUpdate:modelValue": _cache[2] || (_cache[2] = function ($event) {
+          return $setup.castForm.casts = $event;
+        }),
+        options: $props.casts,
+        multiple: true,
+        "close-on-select": false,
+        "clear-on-select": false,
+        "preserve-search": true,
+        placeholder: "Add Casts",
+        label: "name",
+        "track-by": "name"
+      }, null, 8
+      /* PROPS */
+      , ["modelValue", "options"]), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("div", _hoisted_18, [(0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)($setup["JetButton"], null, {
+        "default": (0,vue__WEBPACK_IMPORTED_MODULE_0__.withCtx)(function () {
+          return [_hoisted_19];
+        }),
+        _: 1
+        /* STABLE */
+
+      })])], 40
+      /* PROPS, HYDRATE_EVENTS */
+      , _hoisted_17)])]), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("div", _hoisted_20, [(0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("div", null, [(0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("div", _hoisted_21, [((0,vue__WEBPACK_IMPORTED_MODULE_0__.openBlock)(true), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementBlock)(vue__WEBPACK_IMPORTED_MODULE_0__.Fragment, null, (0,vue__WEBPACK_IMPORTED_MODULE_0__.renderList)($props.movieTags, function (mt) {
+        return (0,vue__WEBPACK_IMPORTED_MODULE_0__.openBlock)(), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementBlock)("div", {
+          "class": "m-2 p-1 text-xs",
+          key: mt.id
+        }, (0,vue__WEBPACK_IMPORTED_MODULE_0__.toDisplayString)(mt.tag_name), 1
+        /* TEXT */
+        );
+      }), 128
+      /* KEYED_FRAGMENT */
+      ))]), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("form", {
+        onSubmit: (0,vue__WEBPACK_IMPORTED_MODULE_0__.withModifiers)($setup.addTag, ["prevent"])
+      }, [(0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)($setup["Multiselect"], {
+        modelValue: $setup.tagForm.tags,
+        "onUpdate:modelValue": _cache[3] || (_cache[3] = function ($event) {
+          return $setup.tagForm.tags = $event;
+        }),
+        options: $props.tags,
+        multiple: true,
+        "close-on-select": false,
+        "clear-on-select": false,
+        "preserve-search": true,
+        placeholder: "Add tags",
+        label: "tag_name",
+        "track-by": "tag_name"
+      }, null, 8
+      /* PROPS */
+      , ["modelValue", "options"]), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createElementVNode)("div", _hoisted_23, [(0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)($setup["JetButton"], null, {
+        "default": (0,vue__WEBPACK_IMPORTED_MODULE_0__.withCtx)(function () {
+          return [_hoisted_24];
+        }),
+        _: 1
+        /* STABLE */
+
+      })])], 40
+      /* PROPS, HYDRATE_EVENTS */
+      , _hoisted_22)])])])])])];
     }),
     _: 1
     /* STABLE */
@@ -31549,6 +31709,30 @@ __webpack_require__.r(__webpack_exports__);
 var ___CSS_LOADER_EXPORT___ = _node_modules_css_loader_dist_runtime_api_js__WEBPACK_IMPORTED_MODULE_0___default()(function(i){return i[1]});
 // Module
 ___CSS_LOADER_EXPORT___.push([module.id, "\n.bg-gray-100[data-v-317d1a6e] {\n        background-color: #f7fafc;\n        background-color: rgba(247, 250, 252, var(--tw-bg-opacity));\n}\n.border-gray-200[data-v-317d1a6e] {\n        border-color: #edf2f7;\n        border-color: rgba(237, 242, 247, var(--tw-border-opacity));\n}\n.text-gray-400[data-v-317d1a6e] {\n        color: #cbd5e0;\n        color: rgba(203, 213, 224, var(--tw-text-opacity));\n}\n.text-gray-500[data-v-317d1a6e] {\n        color: #a0aec0;\n        color: rgba(160, 174, 192, var(--tw-text-opacity));\n}\n.text-gray-600[data-v-317d1a6e] {\n        color: #718096;\n        color: rgba(113, 128, 150, var(--tw-text-opacity));\n}\n.text-gray-700[data-v-317d1a6e] {\n        color: #4a5568;\n        color: rgba(74, 85, 104, var(--tw-text-opacity));\n}\n.text-gray-900[data-v-317d1a6e] {\n        color: #1a202c;\n        color: rgba(26, 32, 44, var(--tw-text-opacity));\n}\n@media (prefers-color-scheme: dark) {\n.dark\\:bg-gray-800[data-v-317d1a6e] {\n            background-color: #2d3748;\n            background-color: rgba(45, 55, 72, var(--tw-bg-opacity));\n}\n.dark\\:bg-gray-900[data-v-317d1a6e] {\n            background-color: #1a202c;\n            background-color: rgba(26, 32, 44, var(--tw-bg-opacity));\n}\n.dark\\:border-gray-700[data-v-317d1a6e] {\n            border-color: #4a5568;\n            border-color: rgba(74, 85, 104, var(--tw-border-opacity));\n}\n.dark\\:text-white[data-v-317d1a6e] {\n            color: #fff;\n            color: rgba(255, 255, 255, var(--tw-text-opacity));\n}\n.dark\\:text-gray-400[data-v-317d1a6e] {\n            color: #cbd5e0;\n            color: rgba(203, 213, 224, var(--tw-text-opacity));\n}\n}\n", ""]);
+// Exports
+/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (___CSS_LOADER_EXPORT___);
+
+
+/***/ }),
+
+/***/ "./node_modules/css-loader/dist/cjs.js??clonedRuleSet-9.use[1]!./node_modules/vue-loader/dist/stylePostLoader.js!./node_modules/postcss-loader/dist/cjs.js??clonedRuleSet-9.use[2]!./node_modules/vue-multiselect/dist/vue-multiselect.css?vue&type=style&index=0&lang=css":
+/*!*********************************************************************************************************************************************************************************************************************************************************************************!*\
+  !*** ./node_modules/css-loader/dist/cjs.js??clonedRuleSet-9.use[1]!./node_modules/vue-loader/dist/stylePostLoader.js!./node_modules/postcss-loader/dist/cjs.js??clonedRuleSet-9.use[2]!./node_modules/vue-multiselect/dist/vue-multiselect.css?vue&type=style&index=0&lang=css ***!
+  \*********************************************************************************************************************************************************************************************************************************************************************************/
+/***/ ((module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
+/* harmony export */ });
+/* harmony import */ var _css_loader_dist_runtime_api_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../../css-loader/dist/runtime/api.js */ "./node_modules/css-loader/dist/runtime/api.js");
+/* harmony import */ var _css_loader_dist_runtime_api_js__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(_css_loader_dist_runtime_api_js__WEBPACK_IMPORTED_MODULE_0__);
+// Imports
+
+var ___CSS_LOADER_EXPORT___ = _css_loader_dist_runtime_api_js__WEBPACK_IMPORTED_MODULE_0___default()(function(i){return i[1]});
+// Module
+___CSS_LOADER_EXPORT___.push([module.id, "fieldset[disabled] .multiselect{pointer-events:none}.multiselect__spinner{position:absolute;right:1px;top:1px;width:48px;height:35px;background:#fff;display:block}.multiselect__spinner:after,.multiselect__spinner:before{position:absolute;content:\"\";top:50%;left:50%;margin:-8px 0 0 -8px;width:16px;height:16px;border-radius:100%;border-color:#41b883 transparent transparent;border-style:solid;border-width:2px;box-shadow:0 0 0 1px transparent}.multiselect__spinner:before{-webkit-animation:spinning 2.4s cubic-bezier(.41,.26,.2,.62);animation:spinning 2.4s cubic-bezier(.41,.26,.2,.62);-webkit-animation-iteration-count:infinite;animation-iteration-count:infinite}.multiselect__spinner:after{-webkit-animation:spinning 2.4s cubic-bezier(.51,.09,.21,.8);animation:spinning 2.4s cubic-bezier(.51,.09,.21,.8);-webkit-animation-iteration-count:infinite;animation-iteration-count:infinite}.multiselect__loading-enter-active,.multiselect__loading-leave-active{transition:opacity .4s ease-in-out;opacity:1}.multiselect__loading-enter,.multiselect__loading-leave-active{opacity:0}.multiselect,.multiselect__input,.multiselect__single{font-family:inherit;font-size:16px;touch-action:manipulation}.multiselect{box-sizing:content-box;display:block;position:relative;width:100%;min-height:40px;text-align:left;color:#35495e}.multiselect *{box-sizing:border-box}.multiselect:focus{outline:none}.multiselect--disabled{background:#ededed;pointer-events:none;opacity:.6}.multiselect--active{z-index:50}.multiselect--active:not(.multiselect--above) .multiselect__current,.multiselect--active:not(.multiselect--above) .multiselect__input,.multiselect--active:not(.multiselect--above) .multiselect__tags{border-bottom-left-radius:0;border-bottom-right-radius:0}.multiselect--active .multiselect__select{transform:rotate(180deg)}.multiselect--above.multiselect--active .multiselect__current,.multiselect--above.multiselect--active .multiselect__input,.multiselect--above.multiselect--active .multiselect__tags{border-top-left-radius:0;border-top-right-radius:0}.multiselect__input,.multiselect__single{position:relative;display:inline-block;min-height:20px;line-height:20px;border:none;border-radius:5px;background:#fff;padding:0 0 0 5px;width:100%;transition:border .1s ease;box-sizing:border-box;margin-bottom:8px;vertical-align:top}.multiselect__input::-moz-placeholder{color:#35495e}.multiselect__input:-ms-input-placeholder{color:#35495e}.multiselect__input::placeholder{color:#35495e}.multiselect__tag~.multiselect__input,.multiselect__tag~.multiselect__single{width:auto}.multiselect__input:hover,.multiselect__single:hover{border-color:#cfcfcf}.multiselect__input:focus,.multiselect__single:focus{border-color:#a8a8a8;outline:none}.multiselect__single{padding-left:5px;margin-bottom:8px}.multiselect__tags-wrap{display:inline}.multiselect__tags{min-height:40px;display:block;padding:8px 40px 0 8px;border-radius:5px;border:1px solid #e8e8e8;background:#fff;font-size:14px}.multiselect__tag{position:relative;display:inline-block;padding:4px 26px 4px 10px;border-radius:5px;margin-right:10px;color:#fff;line-height:1;background:#41b883;margin-bottom:5px;white-space:nowrap;overflow:hidden;max-width:100%;text-overflow:ellipsis}.multiselect__tag-icon{cursor:pointer;margin-left:7px;position:absolute;right:0;top:0;bottom:0;font-weight:700;font-style:normal;width:22px;text-align:center;line-height:22px;transition:all .2s ease;border-radius:5px}.multiselect__tag-icon:after{content:\"×\";color:#266d4d;font-size:14px}.multiselect__tag-icon:focus:after,.multiselect__tag-icon:hover:after{color:#fff}.multiselect__current{min-height:40px;overflow:hidden;padding:8px 12px 0;padding-right:30px;white-space:nowrap;border-radius:5px;border:1px solid #e8e8e8}.multiselect__current,.multiselect__select{line-height:16px;box-sizing:border-box;display:block;margin:0;text-decoration:none;cursor:pointer}.multiselect__select{position:absolute;width:40px;height:38px;right:1px;top:1px;padding:4px 8px;text-align:center;transition:transform .2s ease}.multiselect__select:before{position:relative;right:0;top:65%;color:#999;margin-top:4px;border-style:solid;border-width:5px 5px 0 5px;border-color:#999 transparent transparent transparent;content:\"\"}.multiselect__placeholder{color:#adadad;display:inline-block;margin-bottom:10px;padding-top:2px}.multiselect--active .multiselect__placeholder{display:none}.multiselect__content-wrapper{position:absolute;display:block;background:#fff;width:100%;max-height:240px;overflow:auto;border:1px solid #e8e8e8;border-top:none;border-bottom-left-radius:5px;border-bottom-right-radius:5px;z-index:50;-webkit-overflow-scrolling:touch}.multiselect__content{list-style:none;display:inline-block;padding:0;margin:0;min-width:100%;vertical-align:top}.multiselect--above .multiselect__content-wrapper{bottom:100%;border-bottom-left-radius:0;border-bottom-right-radius:0;border-top-left-radius:5px;border-top-right-radius:5px;border-bottom:none;border-top:1px solid #e8e8e8}.multiselect__content::-webkit-scrollbar{display:none}.multiselect__element{display:block}.multiselect__option{display:block;padding:12px;min-height:40px;line-height:16px;text-decoration:none;text-transform:none;vertical-align:middle;position:relative;cursor:pointer;white-space:nowrap}.multiselect__option:after{top:0;right:0;position:absolute;line-height:40px;padding-right:12px;padding-left:20px;font-size:13px}.multiselect__option--highlight{background:#41b883;outline:none;color:#fff}.multiselect__option--highlight:after{content:attr(data-select);background:#41b883;color:#fff}.multiselect__option--selected{background:#f3f3f3;color:#35495e;font-weight:700}.multiselect__option--selected:after{content:attr(data-selected);color:silver}.multiselect__option--selected.multiselect__option--highlight{background:#ff6a6a;color:#fff}.multiselect__option--selected.multiselect__option--highlight:after{background:#ff6a6a;content:attr(data-deselect);color:#fff}.multiselect--disabled .multiselect__current,.multiselect--disabled .multiselect__select{background:#ededed;color:#a6a6a6}.multiselect__option--disabled{background:#ededed!important;color:#a6a6a6!important;cursor:text;pointer-events:none}.multiselect__option--group{background:#ededed;color:#35495e}.multiselect__option--group.multiselect__option--highlight{background:#35495e;color:#fff}.multiselect__option--group.multiselect__option--highlight:after{background:#35495e}.multiselect__option--disabled.multiselect__option--highlight{background:#dedede}.multiselect__option--group-selected.multiselect__option--highlight{background:#ff6a6a;color:#fff}.multiselect__option--group-selected.multiselect__option--highlight:after{background:#ff6a6a;content:attr(data-deselect);color:#fff}.multiselect-enter-active,.multiselect-leave-active{transition:all .15s ease}.multiselect-enter,.multiselect-leave-active{opacity:0}.multiselect__strong{margin-bottom:8px;line-height:20px;display:inline-block;vertical-align:top}[dir=rtl] .multiselect{text-align:right}[dir=rtl] .multiselect__select{right:auto;left:1px}[dir=rtl] .multiselect__tags{padding:8px 8px 0 40px}[dir=rtl] .multiselect__content{text-align:right}[dir=rtl] .multiselect__option:after{right:auto;left:0}[dir=rtl] .multiselect__clear{right:auto;left:12px}[dir=rtl] .multiselect__spinner{right:auto;left:1px}@-webkit-keyframes spinning{0%{transform:rotate(0)}to{transform:rotate(2turn)}}@keyframes spinning{0%{transform:rotate(0)}to{transform:rotate(2turn)}}", ""]);
 // Exports
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (___CSS_LOADER_EXPORT___);
 
@@ -54533,7 +54717,7 @@ var parseObject = function (chain, val, options, valuesParsed) {
             ) {
                 obj = [];
                 obj[index] = leaf;
-            } else {
+            } else if (cleanRoot !== '__proto__') {
                 obj[cleanRoot] = leaf;
             }
         }
@@ -54751,7 +54935,7 @@ var stringify = function stringify(
     var tmpSc = sideChannel;
     var step = 0;
     var findFlag = false;
-    while ((tmpSc = tmpSc.get(sentinel)) !== undefined && !findFlag) {
+    while ((tmpSc = tmpSc.get(sentinel)) !== void undefined && !findFlag) {
         // Where object last appeared in the ref tree
         var pos = tmpSc.get(object);
         step += 1;
@@ -54813,7 +54997,7 @@ var stringify = function stringify(
     var objKeys;
     if (generateArrayPrefix === 'comma' && isArray(obj)) {
         // we need to join elements in
-        objKeys = [{ value: obj.length > 0 ? obj.join(',') || null : undefined }];
+        objKeys = [{ value: obj.length > 0 ? obj.join(',') || null : void undefined }];
     } else if (isArray(filter)) {
         objKeys = filter;
     } else {
@@ -54823,7 +55007,7 @@ var stringify = function stringify(
 
     for (var j = 0; j < objKeys.length; ++j) {
         var key = objKeys[j];
-        var value = typeof key === 'object' && key.value !== undefined ? key.value : obj[key];
+        var value = typeof key === 'object' && typeof key.value !== 'undefined' ? key.value : obj[key];
 
         if (skipNulls && value === null) {
             continue;
@@ -54863,7 +55047,7 @@ var normalizeStringifyOptions = function normalizeStringifyOptions(opts) {
         return defaults;
     }
 
-    if (opts.encoder !== null && opts.encoder !== undefined && typeof opts.encoder !== 'function') {
+    if (opts.encoder !== null && typeof opts.encoder !== 'undefined' && typeof opts.encoder !== 'function') {
         throw new TypeError('Encoder has to be a function.');
     }
 
@@ -55415,6 +55599,36 @@ var update = _node_modules_style_loader_dist_runtime_injectStylesIntoStyleTag_js
 
 
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (_node_modules_css_loader_dist_cjs_js_clonedRuleSet_9_use_1_node_modules_vue_loader_dist_stylePostLoader_js_node_modules_postcss_loader_dist_cjs_js_clonedRuleSet_9_use_2_node_modules_vue_loader_dist_index_js_ruleSet_0_use_0_Welcome_vue_vue_type_style_index_0_id_317d1a6e_scoped_true_lang_css__WEBPACK_IMPORTED_MODULE_1__["default"].locals || {});
+
+/***/ }),
+
+/***/ "./node_modules/style-loader/dist/cjs.js!./node_modules/css-loader/dist/cjs.js??clonedRuleSet-9.use[1]!./node_modules/vue-loader/dist/stylePostLoader.js!./node_modules/postcss-loader/dist/cjs.js??clonedRuleSet-9.use[2]!./node_modules/vue-multiselect/dist/vue-multiselect.css?vue&type=style&index=0&lang=css":
+/*!*************************************************************************************************************************************************************************************************************************************************************************************************************************!*\
+  !*** ./node_modules/style-loader/dist/cjs.js!./node_modules/css-loader/dist/cjs.js??clonedRuleSet-9.use[1]!./node_modules/vue-loader/dist/stylePostLoader.js!./node_modules/postcss-loader/dist/cjs.js??clonedRuleSet-9.use[2]!./node_modules/vue-multiselect/dist/vue-multiselect.css?vue&type=style&index=0&lang=css ***!
+  \*************************************************************************************************************************************************************************************************************************************************************************************************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
+/* harmony export */ });
+/* harmony import */ var _style_loader_dist_runtime_injectStylesIntoStyleTag_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! !../../style-loader/dist/runtime/injectStylesIntoStyleTag.js */ "./node_modules/style-loader/dist/runtime/injectStylesIntoStyleTag.js");
+/* harmony import */ var _style_loader_dist_runtime_injectStylesIntoStyleTag_js__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(_style_loader_dist_runtime_injectStylesIntoStyleTag_js__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var _css_loader_dist_cjs_js_clonedRuleSet_9_use_1_vue_loader_dist_stylePostLoader_js_postcss_loader_dist_cjs_js_clonedRuleSet_9_use_2_vue_multiselect_css_vue_type_style_index_0_lang_css__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! !!../../css-loader/dist/cjs.js??clonedRuleSet-9.use[1]!../../vue-loader/dist/stylePostLoader.js!../../postcss-loader/dist/cjs.js??clonedRuleSet-9.use[2]!./vue-multiselect.css?vue&type=style&index=0&lang=css */ "./node_modules/css-loader/dist/cjs.js??clonedRuleSet-9.use[1]!./node_modules/vue-loader/dist/stylePostLoader.js!./node_modules/postcss-loader/dist/cjs.js??clonedRuleSet-9.use[2]!./node_modules/vue-multiselect/dist/vue-multiselect.css?vue&type=style&index=0&lang=css");
+
+            
+
+var options = {};
+
+options.insert = "head";
+options.singleton = false;
+
+var update = _style_loader_dist_runtime_injectStylesIntoStyleTag_js__WEBPACK_IMPORTED_MODULE_0___default()(_css_loader_dist_cjs_js_clonedRuleSet_9_use_1_vue_loader_dist_stylePostLoader_js_postcss_loader_dist_cjs_js_clonedRuleSet_9_use_2_vue_multiselect_css_vue_type_style_index_0_lang_css__WEBPACK_IMPORTED_MODULE_1__["default"], options);
+
+
+
+/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (_css_loader_dist_cjs_js_clonedRuleSet_9_use_1_vue_loader_dist_stylePostLoader_js_postcss_loader_dist_cjs_js_clonedRuleSet_9_use_2_vue_multiselect_css_vue_type_style_index_0_lang_css__WEBPACK_IMPORTED_MODULE_1__["default"].locals || {});
 
 /***/ }),
 
@@ -57142,13 +57356,16 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ });
 /* harmony import */ var _Attach_vue_vue_type_template_id_197bb358__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./Attach.vue?vue&type=template&id=197bb358 */ "./resources/js/Pages/Movies/Attach.vue?vue&type=template&id=197bb358");
 /* harmony import */ var _Attach_vue_vue_type_script_setup_true_lang_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./Attach.vue?vue&type=script&setup=true&lang=js */ "./resources/js/Pages/Movies/Attach.vue?vue&type=script&setup=true&lang=js");
-/* harmony import */ var _Users_tony_code_inertia_movie_node_modules_vue_loader_dist_exportHelper_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./node_modules/vue-loader/dist/exportHelper.js */ "./node_modules/vue-loader/dist/exportHelper.js");
+/* harmony import */ var vue_multiselect_dist_vue_multiselect_css_vue_type_style_index_0_lang_css__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! vue-multiselect/dist/vue-multiselect.css?vue&type=style&index=0&lang=css */ "./node_modules/vue-multiselect/dist/vue-multiselect.css?vue&type=style&index=0&lang=css");
+/* harmony import */ var _Users_tony_code_inertia_movie_node_modules_vue_loader_dist_exportHelper_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./node_modules/vue-loader/dist/exportHelper.js */ "./node_modules/vue-loader/dist/exportHelper.js");
 
 
 
 
 ;
-const __exports__ = /*#__PURE__*/(0,_Users_tony_code_inertia_movie_node_modules_vue_loader_dist_exportHelper_js__WEBPACK_IMPORTED_MODULE_2__["default"])(_Attach_vue_vue_type_script_setup_true_lang_js__WEBPACK_IMPORTED_MODULE_1__["default"], [['render',_Attach_vue_vue_type_template_id_197bb358__WEBPACK_IMPORTED_MODULE_0__.render],['__file',"resources/js/Pages/Movies/Attach.vue"]])
+
+
+const __exports__ = /*#__PURE__*/(0,_Users_tony_code_inertia_movie_node_modules_vue_loader_dist_exportHelper_js__WEBPACK_IMPORTED_MODULE_3__["default"])(_Attach_vue_vue_type_script_setup_true_lang_js__WEBPACK_IMPORTED_MODULE_1__["default"], [['render',_Attach_vue_vue_type_template_id_197bb358__WEBPACK_IMPORTED_MODULE_0__.render],['__file',"resources/js/Pages/Movies/Attach.vue"]])
 /* hot reload */
 if (false) {}
 
@@ -59880,6 +60097,19 @@ __webpack_require__.r(__webpack_exports__);
 
 /***/ }),
 
+/***/ "./node_modules/vue-multiselect/dist/vue-multiselect.css?vue&type=style&index=0&lang=css":
+/*!***********************************************************************************************!*\
+  !*** ./node_modules/vue-multiselect/dist/vue-multiselect.css?vue&type=style&index=0&lang=css ***!
+  \***********************************************************************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony import */ var _style_loader_dist_cjs_js_css_loader_dist_cjs_js_clonedRuleSet_9_use_1_vue_loader_dist_stylePostLoader_js_postcss_loader_dist_cjs_js_clonedRuleSet_9_use_2_vue_multiselect_css_vue_type_style_index_0_lang_css__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! -!../../style-loader/dist/cjs.js!../../css-loader/dist/cjs.js??clonedRuleSet-9.use[1]!../../vue-loader/dist/stylePostLoader.js!../../postcss-loader/dist/cjs.js??clonedRuleSet-9.use[2]!./vue-multiselect.css?vue&type=style&index=0&lang=css */ "./node_modules/style-loader/dist/cjs.js!./node_modules/css-loader/dist/cjs.js??clonedRuleSet-9.use[1]!./node_modules/vue-loader/dist/stylePostLoader.js!./node_modules/postcss-loader/dist/cjs.js??clonedRuleSet-9.use[2]!./node_modules/vue-multiselect/dist/vue-multiselect.css?vue&type=style&index=0&lang=css");
+
+
+/***/ }),
+
 /***/ "./resources/js/Pages/Welcome.vue?vue&type=style&index=0&id=317d1a6e&scoped=true&lang=css":
 /*!************************************************************************************************!*\
   !*** ./resources/js/Pages/Welcome.vue?vue&type=style&index=0&id=317d1a6e&scoped=true&lang=css ***!
@@ -59889,6 +60119,1349 @@ __webpack_require__.r(__webpack_exports__);
 "use strict";
 __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var _node_modules_style_loader_dist_cjs_js_node_modules_css_loader_dist_cjs_js_clonedRuleSet_9_use_1_node_modules_vue_loader_dist_stylePostLoader_js_node_modules_postcss_loader_dist_cjs_js_clonedRuleSet_9_use_2_node_modules_vue_loader_dist_index_js_ruleSet_0_use_0_Welcome_vue_vue_type_style_index_0_id_317d1a6e_scoped_true_lang_css__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! -!../../../node_modules/style-loader/dist/cjs.js!../../../node_modules/css-loader/dist/cjs.js??clonedRuleSet-9.use[1]!../../../node_modules/vue-loader/dist/stylePostLoader.js!../../../node_modules/postcss-loader/dist/cjs.js??clonedRuleSet-9.use[2]!../../../node_modules/vue-loader/dist/index.js??ruleSet[0].use[0]!./Welcome.vue?vue&type=style&index=0&id=317d1a6e&scoped=true&lang=css */ "./node_modules/style-loader/dist/cjs.js!./node_modules/css-loader/dist/cjs.js??clonedRuleSet-9.use[1]!./node_modules/vue-loader/dist/stylePostLoader.js!./node_modules/postcss-loader/dist/cjs.js??clonedRuleSet-9.use[2]!./node_modules/vue-loader/dist/index.js??ruleSet[0].use[0]!./resources/js/Pages/Welcome.vue?vue&type=style&index=0&id=317d1a6e&scoped=true&lang=css");
+
+
+/***/ }),
+
+/***/ "./node_modules/vue-multiselect/dist/vue-multiselect.esm.js":
+/*!******************************************************************!*\
+  !*** ./node_modules/vue-multiselect/dist/vue-multiselect.esm.js ***!
+  \******************************************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__),
+/* harmony export */   "Multiselect": () => (/* binding */ script),
+/* harmony export */   "multiselectMixin": () => (/* binding */ multiselectMixin),
+/* harmony export */   "pointerMixin": () => (/* binding */ pointerMixin)
+/* harmony export */ });
+/* harmony import */ var vue__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! vue */ "./node_modules/vue/dist/vue.esm-bundler.js");
+
+
+function isEmpty (opt) {
+  if (opt === 0) return false
+  if (Array.isArray(opt) && opt.length === 0) return true
+  return !opt
+}
+
+function not (fun) {
+  return (...params) => !fun(...params)
+}
+
+function includes (str, query) {
+  /* istanbul ignore else */
+  if (str === undefined) str = 'undefined';
+  if (str === null) str = 'null';
+  if (str === false) str = 'false';
+  const text = str.toString().toLowerCase();
+  return text.indexOf(query.trim()) !== -1
+}
+
+function filterOptions (options, search, label, customLabel) {
+  return search ? options
+    .filter((option) => includes(customLabel(option, label), search))
+    .sort((a, b) => customLabel(a, label).length - customLabel(b, label).length) : options
+}
+
+function stripGroups (options) {
+  return options.filter((option) => !option.$isLabel)
+}
+
+function flattenOptions (values, label) {
+  return (options) =>
+    options.reduce((prev, curr) => {
+      /* istanbul ignore else */
+      if (curr[values] && curr[values].length) {
+        prev.push({
+          $groupLabel: curr[label],
+          $isLabel: true
+        });
+        return prev.concat(curr[values])
+      }
+      return prev
+    }, [])
+}
+
+function filterGroups (search, label, values, groupLabel, customLabel) {
+  return (groups) =>
+    groups.map((group) => {
+      /* istanbul ignore else */
+      if (!group[values]) {
+        console.warn(`Options passed to vue-multiselect do not contain groups, despite the config.`);
+        return []
+      }
+      const groupOptions = filterOptions(group[values], search, label, customLabel);
+
+      return groupOptions.length
+        ? {
+          [groupLabel]: group[groupLabel],
+          [values]: groupOptions
+        }
+        : []
+    })
+}
+
+const flow = (...fns) => (x) => fns.reduce((v, f) => f(v), x);
+
+var multiselectMixin = {
+  data () {
+    return {
+      search: '',
+      isOpen: false,
+      preferredOpenDirection: 'below',
+      optimizedHeight: this.maxHeight
+    }
+  },
+  props: {
+    /**
+     * Decide whether to filter the results based on search query.
+     * Useful for async filtering, where we search through more complex data.
+     * @type {Boolean}
+     */
+    internalSearch: {
+      type: Boolean,
+      default: true
+    },
+    /**
+     * Array of available options: Objects, Strings or Integers.
+     * If array of objects, visible label will default to option.label.
+     * If `labal` prop is passed, label will equal option['label']
+     * @type {Array}
+     */
+    options: {
+      type: Array,
+      required: true
+    },
+    /**
+     * Equivalent to the `multiple` attribute on a `<select>` input.
+     * @default false
+     * @type {Boolean}
+     */
+    multiple: {
+      type: Boolean,
+      default: false
+    },
+    /**
+     * Key to compare objects
+     * @default 'id'
+     * @type {String}
+     */
+    trackBy: {
+      type: String
+    },
+    /**
+     * Label to look for in option Object
+     * @default 'label'
+     * @type {String}
+     */
+    label: {
+      type: String
+    },
+    /**
+     * Enable/disable search in options
+     * @default true
+     * @type {Boolean}
+     */
+    searchable: {
+      type: Boolean,
+      default: true
+    },
+    /**
+     * Clear the search input after `)
+     * @default true
+     * @type {Boolean}
+     */
+    clearOnSelect: {
+      type: Boolean,
+      default: true
+    },
+    /**
+     * Hide already selected options
+     * @default false
+     * @type {Boolean}
+     */
+    hideSelected: {
+      type: Boolean,
+      default: false
+    },
+    /**
+     * Equivalent to the `placeholder` attribute on a `<select>` input.
+     * @default 'Select option'
+     * @type {String}
+     */
+    placeholder: {
+      type: String,
+      default: 'Select option'
+    },
+    /**
+     * Allow to remove all selected values
+     * @default true
+     * @type {Boolean}
+     */
+    allowEmpty: {
+      type: Boolean,
+      default: true
+    },
+    /**
+     * Reset this.internalValue, this.search after this.internalValue changes.
+     * Useful if want to create a stateless dropdown.
+     * @default false
+     * @type {Boolean}
+     */
+    resetAfter: {
+      type: Boolean,
+      default: false
+    },
+    /**
+     * Enable/disable closing after selecting an option
+     * @default true
+     * @type {Boolean}
+     */
+    closeOnSelect: {
+      type: Boolean,
+      default: true
+    },
+    /**
+     * Function to interpolate the custom label
+     * @default false
+     * @type {Function}
+     */
+    customLabel: {
+      type: Function,
+      default (option, label) {
+        if (isEmpty(option)) return ''
+        return label ? option[label] : option
+      }
+    },
+    /**
+     * Disable / Enable tagging
+     * @default false
+     * @type {Boolean}
+     */
+    taggable: {
+      type: Boolean,
+      default: false
+    },
+    /**
+     * String to show when highlighting a potential tag
+     * @default 'Press enter to create a tag'
+     * @type {String}
+    */
+    tagPlaceholder: {
+      type: String,
+      default: 'Press enter to create a tag'
+    },
+    /**
+     * By default new tags will appear above the search results.
+     * Changing to 'bottom' will revert this behaviour
+     * and will proritize the search results
+     * @default 'top'
+     * @type {String}
+    */
+    tagPosition: {
+      type: String,
+      default: 'top'
+    },
+    /**
+     * Number of allowed selected options. No limit if 0.
+     * @default 0
+     * @type {Number}
+    */
+    max: {
+      type: [Number, Boolean],
+      default: false
+    },
+    /**
+     * Will be passed with all events as second param.
+     * Useful for identifying events origin.
+     * @default null
+     * @type {String|Integer}
+    */
+    id: {
+      default: null
+    },
+    /**
+     * Limits the options displayed in the dropdown
+     * to the first X options.
+     * @default 1000
+     * @type {Integer}
+    */
+    optionsLimit: {
+      type: Number,
+      default: 1000
+    },
+    /**
+     * Name of the property containing
+     * the group values
+     * @default 1000
+     * @type {String}
+    */
+    groupValues: {
+      type: String
+    },
+    /**
+     * Name of the property containing
+     * the group label
+     * @default 1000
+     * @type {String}
+    */
+    groupLabel: {
+      type: String
+    },
+    /**
+     * Allow to select all group values
+     * by selecting the group label
+     * @default false
+     * @type {Boolean}
+     */
+    groupSelect: {
+      type: Boolean,
+      default: false
+    },
+    /**
+     * Array of keyboard keys to block
+     * when selecting
+     * @default 1000
+     * @type {String}
+    */
+    blockKeys: {
+      type: Array,
+      default () {
+        return []
+      }
+    },
+    /**
+     * Prevent from wiping up the search value
+     * @default false
+     * @type {Boolean}
+    */
+    preserveSearch: {
+      type: Boolean,
+      default: false
+    },
+    /**
+     * Select 1st options if value is empty
+     * @default false
+     * @type {Boolean}
+    */
+    preselectFirst: {
+      type: Boolean,
+      default: false
+    }
+  },
+  mounted () {
+    /* istanbul ignore else */
+    if (!this.multiple && this.max) {
+      console.warn('[Vue-Multiselect warn]: Max prop should not be used when prop Multiple equals false.');
+    }
+    if (
+      this.preselectFirst &&
+      !this.internalValue.length &&
+      this.options.length
+    ) {
+      this.select(this.filteredOptions[0]);
+    }
+  },
+  computed: {
+    internalValue () {
+      return this.modelValue || this.modelValue === 0
+        ? Array.isArray(this.modelValue) ? this.modelValue : [this.modelValue]
+        : []
+    },
+    filteredOptions () {
+      const search = this.search || '';
+      const normalizedSearch = search.toLowerCase().trim();
+
+      let options = this.options.concat();
+
+      /* istanbul ignore else */
+      if (this.internalSearch) {
+        options = this.groupValues
+          ? this.filterAndFlat(options, normalizedSearch, this.label)
+          : filterOptions(options, normalizedSearch, this.label, this.customLabel);
+      } else {
+        options = this.groupValues ? flattenOptions(this.groupValues, this.groupLabel)(options) : options;
+      }
+
+      options = this.hideSelected
+        ? options.filter(not(this.isSelected))
+        : options;
+
+      /* istanbul ignore else */
+      if (this.taggable && normalizedSearch.length && !this.isExistingOption(normalizedSearch)) {
+        if (this.tagPosition === 'bottom') {
+          options.push({isTag: true, label: search});
+        } else {
+          options.unshift({isTag: true, label: search});
+        }
+      }
+
+      return options.slice(0, this.optionsLimit)
+    },
+    valueKeys () {
+      if (this.trackBy) {
+        return this.internalValue.map((element) => element[this.trackBy])
+      } else {
+        return this.internalValue
+      }
+    },
+    optionKeys () {
+      const options = this.groupValues ? this.flatAndStrip(this.options) : this.options;
+      return options.map((element) => this.customLabel(element, this.label).toString().toLowerCase())
+    },
+    currentOptionLabel () {
+      return this.multiple
+        ? this.searchable ? '' : this.placeholder
+        : this.internalValue.length
+          ? this.getOptionLabel(this.internalValue[0])
+          : this.searchable ? '' : this.placeholder
+    }
+  },
+  watch: {
+    internalValue () {
+      /* istanbul ignore else */
+      if (this.resetAfter && this.internalValue.length) {
+        this.search = '';
+        this.$emit('update:modelValue', this.multiple ? [] : null);
+      }
+    },
+    search () {
+      this.$emit('search-change', this.search);
+    }
+  },
+  emits: ['open', 'search-change', 'close', 'select', 'update:modelValue', 'remove', 'tag'],
+  methods: {
+    /**
+     * Returns the internalValue in a way it can be emited to the parent
+     * @returns {Object||Array||String||Integer}
+     */
+    getValue () {
+      return this.multiple
+        ? this.internalValue
+        : this.internalValue.length === 0
+          ? null
+          : this.internalValue[0]
+    },
+    /**
+     * Filters and then flattens the options list
+     * @param  {Array}
+     * @return {Array} returns a filtered and flat options list
+     */
+    filterAndFlat (options, search, label) {
+      return flow(
+        filterGroups(search, label, this.groupValues, this.groupLabel, this.customLabel),
+        flattenOptions(this.groupValues, this.groupLabel)
+      )(options)
+    },
+    /**
+     * Flattens and then strips the group labels from the options list
+     * @param  {Array}
+     * @return {Array} returns a flat options list without group labels
+     */
+    flatAndStrip (options) {
+      return flow(
+        flattenOptions(this.groupValues, this.groupLabel),
+        stripGroups
+      )(options)
+    },
+    /**
+     * Updates the search value
+     * @param  {String}
+     */
+    updateSearch (query) {
+      this.search = query;
+    },
+    /**
+     * Finds out if the given query is already present
+     * in the available options
+     * @param  {String}
+     * @return {Boolean} returns true if element is available
+     */
+    isExistingOption (query) {
+      return !this.options
+        ? false
+        : this.optionKeys.indexOf(query) > -1
+    },
+    /**
+     * Finds out if the given element is already present
+     * in the result value
+     * @param  {Object||String||Integer} option passed element to check
+     * @returns {Boolean} returns true if element is selected
+     */
+    isSelected (option) {
+      const opt = this.trackBy
+        ? option[this.trackBy]
+        : option;
+      return this.valueKeys.indexOf(opt) > -1
+    },
+    /**
+     * Finds out if the given option is disabled
+     * @param  {Object||String||Integer} option passed element to check
+     * @returns {Boolean} returns true if element is disabled
+     */
+    isOptionDisabled (option) {
+      return !!option.$isDisabled
+    },
+    /**
+     * Returns empty string when options is null/undefined
+     * Returns tag query if option is tag.
+     * Returns the customLabel() results and casts it to string.
+     *
+     * @param  {Object||String||Integer} Passed option
+     * @returns {Object||String}
+     */
+    getOptionLabel (option) {
+      if (isEmpty(option)) return ''
+      /* istanbul ignore else */
+      if (option.isTag) return option.label
+      /* istanbul ignore else */
+      if (option.$isLabel) return option.$groupLabel
+
+      const label = this.customLabel(option, this.label);
+      /* istanbul ignore else */
+      if (isEmpty(label)) return ''
+      return label
+    },
+    /**
+     * Add the given option to the list of selected options
+     * or sets the option as the selected option.
+     * If option is already selected -> remove it from the results.
+     *
+     * @param  {Object||String||Integer} option to select/deselect
+     * @param  {Boolean} block removing
+     */
+    select (option, key) {
+      /* istanbul ignore else */
+      if (option.$isLabel && this.groupSelect) {
+        this.selectGroup(option);
+        return
+      }
+      if (this.blockKeys.indexOf(key) !== -1 ||
+        this.disabled ||
+        option.$isDisabled ||
+        option.$isLabel
+      ) return
+      /* istanbul ignore else */
+      if (this.max && this.multiple && this.internalValue.length === this.max) return
+      /* istanbul ignore else */
+      if (key === 'Tab' && !this.pointerDirty) return
+      if (option.isTag) {
+        this.$emit('tag', option.label, this.id);
+        this.search = '';
+        if (this.closeOnSelect && !this.multiple) this.deactivate();
+      } else {
+        const isSelected = this.isSelected(option);
+
+        if (isSelected) {
+          if (key !== 'Tab') this.removeElement(option);
+          return
+        }
+
+        this.$emit('select', option, this.id);
+
+        if (this.multiple) {
+          this.$emit('update:modelValue', this.internalValue.concat([option]));
+        } else {
+          this.$emit('update:modelValue', option);
+        }
+
+        /* istanbul ignore else */
+        if (this.clearOnSelect) this.search = '';
+      }
+      /* istanbul ignore else */
+      if (this.closeOnSelect) this.deactivate();
+    },
+    /**
+     * Add the given group options to the list of selected options
+     * If all group optiona are already selected -> remove it from the results.
+     *
+     * @param  {Object||String||Integer} group to select/deselect
+     */
+    selectGroup (selectedGroup) {
+      const group = this.options.find((option) => {
+        return option[this.groupLabel] === selectedGroup.$groupLabel
+      });
+
+      if (!group) return
+
+      if (this.wholeGroupSelected(group)) {
+        this.$emit('remove', group[this.groupValues], this.id);
+
+        const newValue = this.internalValue.filter(
+          (option) => group[this.groupValues].indexOf(option) === -1
+        );
+
+        this.$emit('update:modelValue', newValue);
+      } else {
+        const optionsToAdd = group[this.groupValues].filter(
+          (option) => !(this.isOptionDisabled(option) || this.isSelected(option))
+        );
+
+        this.$emit('select', optionsToAdd, this.id);
+        this.$emit(
+          'update:modelValue',
+          this.internalValue.concat(optionsToAdd)
+        );
+      }
+
+      if (this.closeOnSelect) this.deactivate();
+    },
+    /**
+     * Helper to identify if all values in a group are selected
+     *
+     * @param {Object} group to validated selected values against
+     */
+    wholeGroupSelected (group) {
+      return group[this.groupValues].every((option) => this.isSelected(option) || this.isOptionDisabled(option)
+      )
+    },
+    /**
+     * Helper to identify if all values in a group are disabled
+     *
+     * @param {Object} group to check for disabled values
+     */
+    wholeGroupDisabled (group) {
+      return group[this.groupValues].every(this.isOptionDisabled)
+    },
+    /**
+     * Removes the given option from the selected options.
+     * Additionally checks this.allowEmpty prop if option can be removed when
+     * it is the last selected option.
+     *
+     * @param  {type} option description
+     * @return {type}        description
+     */
+    removeElement (option, shouldClose = true) {
+      /* istanbul ignore else */
+      if (this.disabled) return
+      /* istanbul ignore else */
+      if (option.$isDisabled) return
+      /* istanbul ignore else */
+      if (!this.allowEmpty && this.internalValue.length <= 1) {
+        this.deactivate();
+        return
+      }
+
+      const index = typeof option === 'object'
+        ? this.valueKeys.indexOf(option[this.trackBy])
+        : this.valueKeys.indexOf(option);
+
+      this.$emit('remove', option, this.id);
+      if (this.multiple) {
+        const newValue = this.internalValue.slice(0, index).concat(this.internalValue.slice(index + 1));
+        this.$emit('update:modelValue', newValue);
+      } else {
+        this.$emit('update:modelValue', null);
+      }
+
+      /* istanbul ignore else */
+      if (this.closeOnSelect && shouldClose) this.deactivate();
+    },
+    /**
+     * Calls this.removeElement() with the last element
+     * from this.internalValue (selected element Array)
+     *
+     * @fires this#removeElement
+     */
+    removeLastElement () {
+      /* istanbul ignore else */
+      if (this.blockKeys.indexOf('Delete') !== -1) return
+      /* istanbul ignore else */
+      if (this.search.length === 0 && Array.isArray(this.internalValue) && this.internalValue.length) {
+        this.removeElement(this.internalValue[this.internalValue.length - 1], false);
+      }
+    },
+    /**
+     * Opens the multiselect’s dropdown.
+     * Sets this.isOpen to TRUE
+     */
+    activate () {
+      /* istanbul ignore else */
+      if (this.isOpen || this.disabled) return
+
+      this.adjustPosition();
+      /* istanbul ignore else  */
+      if (this.groupValues && this.pointer === 0 && this.filteredOptions.length) {
+        this.pointer = 1;
+      }
+
+      this.isOpen = true;
+      /* istanbul ignore else  */
+      if (this.searchable) {
+        if (!this.preserveSearch) this.search = '';
+        this.$nextTick(() => this.$refs.search && this.$refs.search.focus());
+      } else {
+        this.$el.focus();
+      }
+      this.$emit('open', this.id);
+    },
+    /**
+     * Closes the multiselect’s dropdown.
+     * Sets this.isOpen to FALSE
+     */
+    deactivate () {
+      /* istanbul ignore else */
+      if (!this.isOpen) return
+
+      this.isOpen = false;
+      /* istanbul ignore else  */
+      if (this.searchable) {
+        this.$refs.search && this.$refs.search.blur();
+      } else {
+        this.$el.blur();
+      }
+      if (!this.preserveSearch) this.search = '';
+      this.$emit('close', this.getValue(), this.id);
+    },
+    /**
+     * Call this.activate() or this.deactivate()
+     * depending on this.isOpen value.
+     *
+     * @fires this#activate || this#deactivate
+     * @property {Boolean} isOpen indicates if dropdown is open
+     */
+    toggle () {
+      this.isOpen
+        ? this.deactivate()
+        : this.activate();
+    },
+    /**
+     * Updates the hasEnoughSpace variable used for
+     * detecting where to expand the dropdown
+     */
+    adjustPosition () {
+      if (typeof window === 'undefined') return
+
+      const spaceAbove = this.$el.getBoundingClientRect().top;
+      const spaceBelow = window.innerHeight - this.$el.getBoundingClientRect().bottom;
+      const hasEnoughSpaceBelow = spaceBelow > this.maxHeight;
+
+      if (hasEnoughSpaceBelow || spaceBelow > spaceAbove || this.openDirection === 'below' || this.openDirection === 'bottom') {
+        this.preferredOpenDirection = 'below';
+        this.optimizedHeight = Math.min(spaceBelow - 40, this.maxHeight);
+      } else {
+        this.preferredOpenDirection = 'above';
+        this.optimizedHeight = Math.min(spaceAbove - 40, this.maxHeight);
+      }
+    }
+  }
+};
+
+var pointerMixin = {
+  data () {
+    return {
+      pointer: 0,
+      pointerDirty: false
+    }
+  },
+  props: {
+    /**
+     * Enable/disable highlighting of the pointed value.
+     * @type {Boolean}
+     * @default true
+     */
+    showPointer: {
+      type: Boolean,
+      default: true
+    },
+    optionHeight: {
+      type: Number,
+      default: 40
+    }
+  },
+  computed: {
+    pointerPosition () {
+      return this.pointer * this.optionHeight
+    },
+    visibleElements () {
+      return this.optimizedHeight / this.optionHeight
+    }
+  },
+  watch: {
+    filteredOptions () {
+      this.pointerAdjust();
+    },
+    isOpen () {
+      this.pointerDirty = false;
+    },
+    pointer () {
+      this.$refs.search && this.$refs.search.setAttribute('aria-activedescendant', this.id + '-' + this.pointer.toString());
+    }
+  },
+  methods: {
+    optionHighlight (index, option) {
+      return {
+        'multiselect__option--highlight': index === this.pointer && this.showPointer,
+        'multiselect__option--selected': this.isSelected(option)
+      }
+    },
+    groupHighlight (index, selectedGroup) {
+      if (!this.groupSelect) {
+        return [
+          'multiselect__option--disabled',
+          {'multiselect__option--group': selectedGroup.$isLabel}
+        ]
+      }
+
+      const group = this.options.find((option) => {
+        return option[this.groupLabel] === selectedGroup.$groupLabel
+      });
+
+      return group && !this.wholeGroupDisabled(group) ? [
+        'multiselect__option--group',
+        {'multiselect__option--highlight': index === this.pointer && this.showPointer},
+        {'multiselect__option--group-selected': this.wholeGroupSelected(group)}
+      ] : 'multiselect__option--disabled'
+    },
+    addPointerElement ({key} = 'Enter') {
+      /* istanbul ignore else */
+      if (this.filteredOptions.length > 0) {
+        this.select(this.filteredOptions[this.pointer], key);
+      }
+      this.pointerReset();
+    },
+    pointerForward () {
+      /* istanbul ignore else */
+      if (this.pointer < this.filteredOptions.length - 1) {
+        this.pointer++;
+        /* istanbul ignore next */
+        if (this.$refs.list.scrollTop <= this.pointerPosition - (this.visibleElements - 1) * this.optionHeight) {
+          this.$refs.list.scrollTop = this.pointerPosition - (this.visibleElements - 1) * this.optionHeight;
+        }
+        /* istanbul ignore else */
+        if (
+          this.filteredOptions[this.pointer] &&
+          this.filteredOptions[this.pointer].$isLabel &&
+          !this.groupSelect
+        ) this.pointerForward();
+      }
+      this.pointerDirty = true;
+    },
+    pointerBackward () {
+      if (this.pointer > 0) {
+        this.pointer--;
+        /* istanbul ignore else */
+        if (this.$refs.list.scrollTop >= this.pointerPosition) {
+          this.$refs.list.scrollTop = this.pointerPosition;
+        }
+        /* istanbul ignore else */
+        if (
+          this.filteredOptions[this.pointer] &&
+          this.filteredOptions[this.pointer].$isLabel &&
+          !this.groupSelect
+        ) this.pointerBackward();
+      } else {
+        /* istanbul ignore else */
+        if (
+          this.filteredOptions[this.pointer] &&
+          this.filteredOptions[0].$isLabel &&
+          !this.groupSelect
+        ) this.pointerForward();
+      }
+      this.pointerDirty = true;
+    },
+    pointerReset () {
+      /* istanbul ignore else */
+      if (!this.closeOnSelect) return
+      this.pointer = 0;
+      /* istanbul ignore else */
+      if (this.$refs.list) {
+        this.$refs.list.scrollTop = 0;
+      }
+    },
+    pointerAdjust () {
+      /* istanbul ignore else */
+      if (this.pointer >= this.filteredOptions.length - 1) {
+        this.pointer = this.filteredOptions.length
+          ? this.filteredOptions.length - 1
+          : 0;
+      }
+
+      if (this.filteredOptions.length > 0 &&
+        this.filteredOptions[this.pointer].$isLabel &&
+        !this.groupSelect
+      ) {
+        this.pointerForward();
+      }
+    },
+    pointerSet (index) {
+      this.pointer = index;
+      this.pointerDirty = true;
+    }
+  }
+};
+
+var script = {
+  name: 'vue-multiselect',
+  mixins: [multiselectMixin, pointerMixin],
+  props: {
+    /**
+       * name attribute to match optional label element
+       * @default ''
+       * @type {String}
+       */
+    name: {
+      type: String,
+      default: ''
+    },
+    /**
+       * Presets the selected options value.
+       * @type {Object||Array||String||Integer}
+       */
+    modelValue: {
+      type: null,
+      default () {
+        return []
+      }
+    },
+    /**
+       * String to show when pointing to an option
+       * @default 'Press enter to select'
+       * @type {String}
+       */
+    selectLabel: {
+      type: String,
+      default: 'Press enter to select'
+    },
+    /**
+       * String to show when pointing to an option
+       * @default 'Press enter to select'
+       * @type {String}
+       */
+    selectGroupLabel: {
+      type: String,
+      default: 'Press enter to select group'
+    },
+    /**
+       * String to show next to selected option
+       * @default 'Selected'
+       * @type {String}
+       */
+    selectedLabel: {
+      type: String,
+      default: 'Selected'
+    },
+    /**
+       * String to show when pointing to an already selected option
+       * @default 'Press enter to remove'
+       * @type {String}
+       */
+    deselectLabel: {
+      type: String,
+      default: 'Press enter to remove'
+    },
+    /**
+       * String to show when pointing to an already selected option
+       * @default 'Press enter to remove'
+       * @type {String}
+       */
+    deselectGroupLabel: {
+      type: String,
+      default: 'Press enter to deselect group'
+    },
+    /**
+       * Decide whether to show pointer labels
+       * @default true
+       * @type {Boolean}
+       */
+    showLabels: {
+      type: Boolean,
+      default: true
+    },
+    /**
+       * Limit the display of selected options. The rest will be hidden within the limitText string.
+       * @default 99999
+       * @type {Integer}
+       */
+    limit: {
+      type: Number,
+      default: 99999
+    },
+    /**
+       * Sets maxHeight style value of the dropdown
+       * @default 300
+       * @type {Integer}
+       */
+    maxHeight: {
+      type: Number,
+      default: 300
+    },
+    /**
+       * Function that process the message shown when selected
+       * elements pass the defined limit.
+       * @default 'and * more'
+       * @param {Int} count Number of elements more than limit
+       * @type {Function}
+       */
+    limitText: {
+      type: Function,
+      default: (count) => `and ${count} more`
+    },
+    /**
+       * Set true to trigger the loading spinner.
+       * @default False
+       * @type {Boolean}
+       */
+    loading: {
+      type: Boolean,
+      default: false
+    },
+    /**
+       * Disables the multiselect if true.
+       * @default false
+       * @type {Boolean}
+       */
+    disabled: {
+      type: Boolean,
+      default: false
+    },
+    /**
+       * Fixed opening direction
+       * @default ''
+       * @type {String}
+       */
+    openDirection: {
+      type: String,
+      default: ''
+    },
+    /**
+       * Shows slot with message about empty options
+       * @default true
+       * @type {Boolean}
+       */
+    showNoOptions: {
+      type: Boolean,
+      default: true
+    },
+    showNoResults: {
+      type: Boolean,
+      default: true
+    },
+    tabindex: {
+      type: Number,
+      default: 0
+    }
+  },
+  computed: {
+    isSingleLabelVisible () {
+      return (
+        (this.singleValue || this.singleValue === 0) &&
+          (!this.isOpen || !this.searchable) &&
+          !this.visibleValues.length
+      )
+    },
+    isPlaceholderVisible () {
+      return !this.internalValue.length && (!this.searchable || !this.isOpen)
+    },
+    visibleValues () {
+      return this.multiple ? this.internalValue.slice(0, this.limit) : []
+    },
+    singleValue () {
+      return this.internalValue[0]
+    },
+    deselectLabelText () {
+      return this.showLabels ? this.deselectLabel : ''
+    },
+    deselectGroupLabelText () {
+      return this.showLabels ? this.deselectGroupLabel : ''
+    },
+    selectLabelText () {
+      return this.showLabels ? this.selectLabel : ''
+    },
+    selectGroupLabelText () {
+      return this.showLabels ? this.selectGroupLabel : ''
+    },
+    selectedLabelText () {
+      return this.showLabels ? this.selectedLabel : ''
+    },
+    inputStyle () {
+      if (
+        this.searchable ||
+          (this.multiple && this.modelValue && this.modelValue.length)
+      ) {
+        // Hide input by setting the width to 0 allowing it to receive focus
+        return this.isOpen
+          ? {width: '100%'}
+          : {width: '0', position: 'absolute', padding: '0'}
+      }
+      return ''
+    },
+    contentStyle () {
+      return this.options.length
+        ? {display: 'inline-block'}
+        : {display: 'block'}
+    },
+    isAbove () {
+      if (this.openDirection === 'above' || this.openDirection === 'top') {
+        return true
+      } else if (
+        this.openDirection === 'below' ||
+          this.openDirection === 'bottom'
+      ) {
+        return false
+      } else {
+        return this.preferredOpenDirection === 'above'
+      }
+    },
+    showSearchInput () {
+      return (
+        this.searchable &&
+          (this.hasSingleSelectedSlot &&
+            (this.visibleSingleValue || this.visibleSingleValue === 0)
+            ? this.isOpen
+            : true)
+      )
+    }
+  }
+};
+
+const _hoisted_1 = {
+  ref: "tags",
+  class: "multiselect__tags"
+};
+const _hoisted_2 = { class: "multiselect__tags-wrap" };
+const _hoisted_3 = { class: "multiselect__spinner" };
+const _hoisted_4 = { key: 0 };
+const _hoisted_5 = { class: "multiselect__option" };
+const _hoisted_6 = { class: "multiselect__option" };
+const _hoisted_7 = /*#__PURE__*/(0,vue__WEBPACK_IMPORTED_MODULE_0__.createTextVNode)("No elements found. Consider changing the search query.");
+const _hoisted_8 = { class: "multiselect__option" };
+const _hoisted_9 = /*#__PURE__*/(0,vue__WEBPACK_IMPORTED_MODULE_0__.createTextVNode)("List is empty.");
+
+function render(_ctx, _cache, $props, $setup, $data, $options) {
+  return ((0,vue__WEBPACK_IMPORTED_MODULE_0__.openBlock)(), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createBlock)("div", {
+    tabindex: _ctx.searchable ? -1 : $props.tabindex,
+    class: [{ 'multiselect--active': _ctx.isOpen, 'multiselect--disabled': $props.disabled, 'multiselect--above': $options.isAbove }, "multiselect"],
+    onFocus: _cache[14] || (_cache[14] = $event => (_ctx.activate())),
+    onBlur: _cache[15] || (_cache[15] = $event => (_ctx.searchable ? false : _ctx.deactivate())),
+    onKeydown: [
+      _cache[16] || (_cache[16] = (0,vue__WEBPACK_IMPORTED_MODULE_0__.withKeys)((0,vue__WEBPACK_IMPORTED_MODULE_0__.withModifiers)($event => (_ctx.pointerForward()), ["self","prevent"]), ["down"])),
+      _cache[17] || (_cache[17] = (0,vue__WEBPACK_IMPORTED_MODULE_0__.withKeys)((0,vue__WEBPACK_IMPORTED_MODULE_0__.withModifiers)($event => (_ctx.pointerBackward()), ["self","prevent"]), ["up"]))
+    ],
+    onKeypress: _cache[18] || (_cache[18] = (0,vue__WEBPACK_IMPORTED_MODULE_0__.withKeys)((0,vue__WEBPACK_IMPORTED_MODULE_0__.withModifiers)($event => (_ctx.addPointerElement($event)), ["stop","self"]), ["enter","tab"])),
+    onKeyup: _cache[19] || (_cache[19] = (0,vue__WEBPACK_IMPORTED_MODULE_0__.withKeys)($event => (_ctx.deactivate()), ["esc"])),
+    role: "combobox",
+    "aria-owns": 'listbox-'+_ctx.id
+  }, [
+    (0,vue__WEBPACK_IMPORTED_MODULE_0__.renderSlot)(_ctx.$slots, "caret", { toggle: _ctx.toggle }, () => [
+      (0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)("div", {
+        onMousedown: _cache[1] || (_cache[1] = (0,vue__WEBPACK_IMPORTED_MODULE_0__.withModifiers)($event => (_ctx.toggle()), ["prevent","stop"])),
+        class: "multiselect__select"
+      }, null, 32 /* HYDRATE_EVENTS */)
+    ]),
+    (0,vue__WEBPACK_IMPORTED_MODULE_0__.renderSlot)(_ctx.$slots, "clear", { search: _ctx.search }),
+    (0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)("div", _hoisted_1, [
+      (0,vue__WEBPACK_IMPORTED_MODULE_0__.renderSlot)(_ctx.$slots, "selection", {
+        search: _ctx.search,
+        remove: _ctx.removeElement,
+        values: $options.visibleValues,
+        isOpen: _ctx.isOpen
+      }, () => [
+        (0,vue__WEBPACK_IMPORTED_MODULE_0__.withDirectives)((0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)("div", _hoisted_2, [
+          ((0,vue__WEBPACK_IMPORTED_MODULE_0__.openBlock)(true), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createBlock)(vue__WEBPACK_IMPORTED_MODULE_0__.Fragment, null, (0,vue__WEBPACK_IMPORTED_MODULE_0__.renderList)($options.visibleValues, (option, index) => {
+            return (0,vue__WEBPACK_IMPORTED_MODULE_0__.renderSlot)(_ctx.$slots, "tag", {
+              option: option,
+              search: _ctx.search,
+              remove: _ctx.removeElement
+            }, () => [
+              ((0,vue__WEBPACK_IMPORTED_MODULE_0__.openBlock)(), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createBlock)("span", {
+                class: "multiselect__tag",
+                key: index
+              }, [
+                (0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)("span", {
+                  textContent: (0,vue__WEBPACK_IMPORTED_MODULE_0__.toDisplayString)(_ctx.getOptionLabel(option))
+                }, null, 8 /* PROPS */, ["textContent"]),
+                (0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)("i", {
+                  tabindex: "1",
+                  onKeypress: (0,vue__WEBPACK_IMPORTED_MODULE_0__.withKeys)((0,vue__WEBPACK_IMPORTED_MODULE_0__.withModifiers)($event => (_ctx.removeElement(option)), ["prevent"]), ["enter"]),
+                  onMousedown: (0,vue__WEBPACK_IMPORTED_MODULE_0__.withModifiers)($event => (_ctx.removeElement(option)), ["prevent"]),
+                  class: "multiselect__tag-icon"
+                }, null, 40 /* PROPS, HYDRATE_EVENTS */, ["onKeypress", "onMousedown"])
+              ]))
+            ])
+          }), 256 /* UNKEYED_FRAGMENT */))
+        ], 512 /* NEED_PATCH */), [
+          [vue__WEBPACK_IMPORTED_MODULE_0__.vShow, $options.visibleValues.length > 0]
+        ]),
+        (_ctx.internalValue && _ctx.internalValue.length > $props.limit)
+          ? (0,vue__WEBPACK_IMPORTED_MODULE_0__.renderSlot)(_ctx.$slots, "limit", { key: 0 }, () => [
+              (0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)("strong", {
+                class: "multiselect__strong",
+                textContent: (0,vue__WEBPACK_IMPORTED_MODULE_0__.toDisplayString)($props.limitText(_ctx.internalValue.length - $props.limit))
+              }, null, 8 /* PROPS */, ["textContent"])
+            ])
+          : (0,vue__WEBPACK_IMPORTED_MODULE_0__.createCommentVNode)("v-if", true)
+      ]),
+      (0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)(vue__WEBPACK_IMPORTED_MODULE_0__.Transition, { name: "multiselect__loading" }, {
+        default: (0,vue__WEBPACK_IMPORTED_MODULE_0__.withCtx)(() => [
+          (0,vue__WEBPACK_IMPORTED_MODULE_0__.renderSlot)(_ctx.$slots, "loading", {}, () => [
+            (0,vue__WEBPACK_IMPORTED_MODULE_0__.withDirectives)((0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)("div", _hoisted_3, null, 512 /* NEED_PATCH */), [
+              [vue__WEBPACK_IMPORTED_MODULE_0__.vShow, $props.loading]
+            ])
+          ])
+        ]),
+        _: 3 /* FORWARDED */
+      }),
+      (_ctx.searchable)
+        ? ((0,vue__WEBPACK_IMPORTED_MODULE_0__.openBlock)(), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createBlock)("input", {
+            key: 0,
+            ref: "search",
+            name: $props.name,
+            id: _ctx.id,
+            type: "text",
+            autocomplete: "off",
+            spellcheck: "false",
+            placeholder: _ctx.placeholder,
+            style: $options.inputStyle,
+            value: _ctx.search,
+            disabled: $props.disabled,
+            tabindex: $props.tabindex,
+            onInput: _cache[2] || (_cache[2] = $event => (_ctx.updateSearch($event.target.value))),
+            onFocus: _cache[3] || (_cache[3] = (0,vue__WEBPACK_IMPORTED_MODULE_0__.withModifiers)($event => (_ctx.activate()), ["prevent"])),
+            onBlur: _cache[4] || (_cache[4] = (0,vue__WEBPACK_IMPORTED_MODULE_0__.withModifiers)($event => (_ctx.deactivate()), ["prevent"])),
+            onKeyup: _cache[5] || (_cache[5] = (0,vue__WEBPACK_IMPORTED_MODULE_0__.withKeys)($event => (_ctx.deactivate()), ["esc"])),
+            onKeydown: [
+              _cache[6] || (_cache[6] = (0,vue__WEBPACK_IMPORTED_MODULE_0__.withKeys)((0,vue__WEBPACK_IMPORTED_MODULE_0__.withModifiers)($event => (_ctx.pointerForward()), ["prevent"]), ["down"])),
+              _cache[7] || (_cache[7] = (0,vue__WEBPACK_IMPORTED_MODULE_0__.withKeys)((0,vue__WEBPACK_IMPORTED_MODULE_0__.withModifiers)($event => (_ctx.pointerBackward()), ["prevent"]), ["up"])),
+              _cache[9] || (_cache[9] = (0,vue__WEBPACK_IMPORTED_MODULE_0__.withKeys)((0,vue__WEBPACK_IMPORTED_MODULE_0__.withModifiers)($event => (_ctx.removeLastElement()), ["stop"]), ["delete"]))
+            ],
+            onKeypress: _cache[8] || (_cache[8] = (0,vue__WEBPACK_IMPORTED_MODULE_0__.withKeys)((0,vue__WEBPACK_IMPORTED_MODULE_0__.withModifiers)($event => (_ctx.addPointerElement($event)), ["prevent","stop","self"]), ["enter"])),
+            class: "multiselect__input",
+            "aria-controls": 'listbox-'+_ctx.id
+          }, null, 44 /* STYLE, PROPS, HYDRATE_EVENTS */, ["name", "id", "placeholder", "value", "disabled", "tabindex", "aria-controls"]))
+        : (0,vue__WEBPACK_IMPORTED_MODULE_0__.createCommentVNode)("v-if", true),
+      ($options.isSingleLabelVisible)
+        ? ((0,vue__WEBPACK_IMPORTED_MODULE_0__.openBlock)(), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createBlock)("span", {
+            key: 1,
+            class: "multiselect__single",
+            onMousedown: _cache[10] || (_cache[10] = (0,vue__WEBPACK_IMPORTED_MODULE_0__.withModifiers)((...args) => (_ctx.toggle && _ctx.toggle(...args)), ["prevent"]))
+          }, [
+            (0,vue__WEBPACK_IMPORTED_MODULE_0__.renderSlot)(_ctx.$slots, "singleLabel", { option: $options.singleValue }, () => [
+              (0,vue__WEBPACK_IMPORTED_MODULE_0__.createTextVNode)((0,vue__WEBPACK_IMPORTED_MODULE_0__.toDisplayString)(_ctx.currentOptionLabel), 1 /* TEXT */)
+            ])
+          ], 32 /* HYDRATE_EVENTS */))
+        : (0,vue__WEBPACK_IMPORTED_MODULE_0__.createCommentVNode)("v-if", true),
+      ($options.isPlaceholderVisible)
+        ? ((0,vue__WEBPACK_IMPORTED_MODULE_0__.openBlock)(), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createBlock)("span", {
+            key: 2,
+            class: "multiselect__placeholder",
+            onMousedown: _cache[11] || (_cache[11] = (0,vue__WEBPACK_IMPORTED_MODULE_0__.withModifiers)((...args) => (_ctx.toggle && _ctx.toggle(...args)), ["prevent"]))
+          }, [
+            (0,vue__WEBPACK_IMPORTED_MODULE_0__.renderSlot)(_ctx.$slots, "placeholder", {}, () => [
+              (0,vue__WEBPACK_IMPORTED_MODULE_0__.createTextVNode)((0,vue__WEBPACK_IMPORTED_MODULE_0__.toDisplayString)(_ctx.placeholder), 1 /* TEXT */)
+            ])
+          ], 32 /* HYDRATE_EVENTS */))
+        : (0,vue__WEBPACK_IMPORTED_MODULE_0__.createCommentVNode)("v-if", true)
+    ], 512 /* NEED_PATCH */),
+    (0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)(vue__WEBPACK_IMPORTED_MODULE_0__.Transition, { name: "multiselect" }, {
+      default: (0,vue__WEBPACK_IMPORTED_MODULE_0__.withCtx)(() => [
+        (0,vue__WEBPACK_IMPORTED_MODULE_0__.withDirectives)((0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)("div", {
+          class: "multiselect__content-wrapper",
+          onFocus: _cache[12] || (_cache[12] = (...args) => (_ctx.activate && _ctx.activate(...args))),
+          tabindex: "-1",
+          onMousedown: _cache[13] || (_cache[13] = (0,vue__WEBPACK_IMPORTED_MODULE_0__.withModifiers)(() => {}, ["prevent"])),
+          style: { maxHeight: _ctx.optimizedHeight + 'px' },
+          ref: "list"
+        }, [
+          (0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)("ul", {
+            class: "multiselect__content",
+            style: $options.contentStyle,
+            role: "listbox",
+            id: 'listbox-'+_ctx.id
+          }, [
+            (0,vue__WEBPACK_IMPORTED_MODULE_0__.renderSlot)(_ctx.$slots, "beforeList"),
+            (_ctx.multiple && _ctx.max === _ctx.internalValue.length)
+              ? ((0,vue__WEBPACK_IMPORTED_MODULE_0__.openBlock)(), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createBlock)("li", _hoisted_4, [
+                  (0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)("span", _hoisted_5, [
+                    (0,vue__WEBPACK_IMPORTED_MODULE_0__.renderSlot)(_ctx.$slots, "maxElements", {}, () => [
+                      (0,vue__WEBPACK_IMPORTED_MODULE_0__.createTextVNode)("Maximum of " + (0,vue__WEBPACK_IMPORTED_MODULE_0__.toDisplayString)(_ctx.max) + " options selected. First remove a selected option to select another.", 1 /* TEXT */)
+                    ])
+                  ])
+                ]))
+              : (0,vue__WEBPACK_IMPORTED_MODULE_0__.createCommentVNode)("v-if", true),
+            (!_ctx.max || _ctx.internalValue.length < _ctx.max)
+              ? ((0,vue__WEBPACK_IMPORTED_MODULE_0__.openBlock)(true), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createBlock)(vue__WEBPACK_IMPORTED_MODULE_0__.Fragment, { key: 1 }, (0,vue__WEBPACK_IMPORTED_MODULE_0__.renderList)(_ctx.filteredOptions, (option, index) => {
+                  return ((0,vue__WEBPACK_IMPORTED_MODULE_0__.openBlock)(), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createBlock)("li", {
+                    class: "multiselect__element",
+                    key: index,
+                    id: _ctx.id + '-' + index,
+                    role: !(option && (option.$isLabel || option.$isDisabled)) ? 'option' : null
+                  }, [
+                    (!(option && (option.$isLabel || option.$isDisabled)))
+                      ? ((0,vue__WEBPACK_IMPORTED_MODULE_0__.openBlock)(), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createBlock)("span", {
+                          key: 0,
+                          class: [_ctx.optionHighlight(index, option), "multiselect__option"],
+                          onClick: (0,vue__WEBPACK_IMPORTED_MODULE_0__.withModifiers)($event => (_ctx.select(option)), ["stop"]),
+                          onMouseenter: (0,vue__WEBPACK_IMPORTED_MODULE_0__.withModifiers)($event => (_ctx.pointerSet(index)), ["self"]),
+                          "data-select": option && option.isTag ? _ctx.tagPlaceholder : $options.selectLabelText,
+                          "data-selected": $options.selectedLabelText,
+                          "data-deselect": $options.deselectLabelText
+                        }, [
+                          (0,vue__WEBPACK_IMPORTED_MODULE_0__.renderSlot)(_ctx.$slots, "option", {
+                            option: option,
+                            search: _ctx.search,
+                            index: index
+                          }, () => [
+                            (0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)("span", null, (0,vue__WEBPACK_IMPORTED_MODULE_0__.toDisplayString)(_ctx.getOptionLabel(option)), 1 /* TEXT */)
+                          ])
+                        ], 42 /* CLASS, PROPS, HYDRATE_EVENTS */, ["onClick", "onMouseenter", "data-select", "data-selected", "data-deselect"]))
+                      : (0,vue__WEBPACK_IMPORTED_MODULE_0__.createCommentVNode)("v-if", true),
+                    (option && (option.$isLabel || option.$isDisabled))
+                      ? ((0,vue__WEBPACK_IMPORTED_MODULE_0__.openBlock)(), (0,vue__WEBPACK_IMPORTED_MODULE_0__.createBlock)("span", {
+                          key: 1,
+                          "data-select": _ctx.groupSelect && $options.selectGroupLabelText,
+                          "data-deselect": _ctx.groupSelect && $options.deselectGroupLabelText,
+                          class: [_ctx.groupHighlight(index, option), "multiselect__option"],
+                          onMouseenter: (0,vue__WEBPACK_IMPORTED_MODULE_0__.withModifiers)($event => (_ctx.groupSelect && _ctx.pointerSet(index)), ["self"]),
+                          onMousedown: (0,vue__WEBPACK_IMPORTED_MODULE_0__.withModifiers)($event => (_ctx.selectGroup(option)), ["prevent"])
+                        }, [
+                          (0,vue__WEBPACK_IMPORTED_MODULE_0__.renderSlot)(_ctx.$slots, "option", {
+                            option: option,
+                            search: _ctx.search,
+                            index: index
+                          }, () => [
+                            (0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)("span", null, (0,vue__WEBPACK_IMPORTED_MODULE_0__.toDisplayString)(_ctx.getOptionLabel(option)), 1 /* TEXT */)
+                          ])
+                        ], 42 /* CLASS, PROPS, HYDRATE_EVENTS */, ["data-select", "data-deselect", "onMouseenter", "onMousedown"]))
+                      : (0,vue__WEBPACK_IMPORTED_MODULE_0__.createCommentVNode)("v-if", true)
+                  ], 8 /* PROPS */, ["id", "role"]))
+                }), 128 /* KEYED_FRAGMENT */))
+              : (0,vue__WEBPACK_IMPORTED_MODULE_0__.createCommentVNode)("v-if", true),
+            (0,vue__WEBPACK_IMPORTED_MODULE_0__.withDirectives)((0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)("li", null, [
+              (0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)("span", _hoisted_6, [
+                (0,vue__WEBPACK_IMPORTED_MODULE_0__.renderSlot)(_ctx.$slots, "noResult", { search: _ctx.search }, () => [
+                  _hoisted_7
+                ])
+              ])
+            ], 512 /* NEED_PATCH */), [
+              [vue__WEBPACK_IMPORTED_MODULE_0__.vShow, $props.showNoResults && (_ctx.filteredOptions.length === 0 && _ctx.search && !$props.loading)]
+            ]),
+            (0,vue__WEBPACK_IMPORTED_MODULE_0__.withDirectives)((0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)("li", null, [
+              (0,vue__WEBPACK_IMPORTED_MODULE_0__.createVNode)("span", _hoisted_8, [
+                (0,vue__WEBPACK_IMPORTED_MODULE_0__.renderSlot)(_ctx.$slots, "noOptions", {}, () => [
+                  _hoisted_9
+                ])
+              ])
+            ], 512 /* NEED_PATCH */), [
+              [vue__WEBPACK_IMPORTED_MODULE_0__.vShow, $props.showNoOptions && (_ctx.options.length === 0 && !_ctx.search && !$props.loading)]
+            ]),
+            (0,vue__WEBPACK_IMPORTED_MODULE_0__.renderSlot)(_ctx.$slots, "afterList")
+          ], 12 /* STYLE, PROPS */, ["id"])
+        ], 36 /* STYLE, HYDRATE_EVENTS */), [
+          [vue__WEBPACK_IMPORTED_MODULE_0__.vShow, _ctx.isOpen]
+        ])
+      ]),
+      _: 3 /* FORWARDED */
+    })
+  ], 42 /* CLASS, PROPS, HYDRATE_EVENTS */, ["tabindex", "aria-owns"]))
+}
+
+script.render = render;
+
+/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (script);
+
 
 
 /***/ }),
@@ -59962,6 +61535,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   "isReadonly": () => (/* reexport safe */ _vue_runtime_dom__WEBPACK_IMPORTED_MODULE_0__.isReadonly),
 /* harmony export */   "isRef": () => (/* reexport safe */ _vue_runtime_dom__WEBPACK_IMPORTED_MODULE_0__.isRef),
 /* harmony export */   "isRuntimeOnly": () => (/* reexport safe */ _vue_runtime_dom__WEBPACK_IMPORTED_MODULE_0__.isRuntimeOnly),
+/* harmony export */   "isShallow": () => (/* reexport safe */ _vue_runtime_dom__WEBPACK_IMPORTED_MODULE_0__.isShallow),
 /* harmony export */   "isVNode": () => (/* reexport safe */ _vue_runtime_dom__WEBPACK_IMPORTED_MODULE_0__.isVNode),
 /* harmony export */   "markRaw": () => (/* reexport safe */ _vue_runtime_dom__WEBPACK_IMPORTED_MODULE_0__.markRaw),
 /* harmony export */   "mergeDefaults": () => (/* reexport safe */ _vue_runtime_dom__WEBPACK_IMPORTED_MODULE_0__.mergeDefaults),
@@ -60380,7 +61954,7 @@ module.exports = JSON.parse('{"name":"axios","version":"0.21.4","description":"P
 /******/ 				if(__webpack_require__.o(installedChunks, chunkId) && installedChunks[chunkId]) {
 /******/ 					installedChunks[chunkId][0]();
 /******/ 				}
-/******/ 				installedChunks[chunkIds[i]] = 0;
+/******/ 				installedChunks[chunkId] = 0;
 /******/ 			}
 /******/ 			return __webpack_require__.O(result);
 /******/ 		}
