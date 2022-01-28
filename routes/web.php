@@ -8,6 +8,11 @@ use App\Http\Controllers\Admin\MovieController;
 use App\Http\Controllers\Admin\SeasonController;
 use App\Http\Controllers\Admin\TagController;
 use App\Http\Controllers\Admin\TvShowController;
+use App\Http\Controllers\Frontend\CastController as FrontendCastController;
+use App\Http\Controllers\Frontend\GenreController as FrontendGenreController;
+use App\Http\Controllers\Frontend\MovieController as FrontendMovieController;
+use App\Http\Controllers\Frontend\TvShowController as FrontendTvShowController;
+use App\Http\Controllers\Frontend\WelcomeController;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -22,15 +27,16 @@ use Inertia\Inertia;
 | contains the "web" middleware group. Now create something great!
 |
 */
-
-Route::get('/', function () {
-    return Inertia::render('Welcome', [
-        'canLogin' => Route::has('login'),
-        'canRegister' => Route::has('register'),
-        'laravelVersion' => Application::VERSION,
-        'phpVersion' => PHP_VERSION,
-    ]);
-});
+Route::get('/', [WelcomeController::class, 'index']);
+Route::get('/movies', [FrontendMovieController::class, 'index'])->name('movies.index');
+Route::get('/movies/{movie:slug}', [FrontendMovieController::class, 'show'])->name('movies.show');
+Route::get('/tv-shows', [FrontendTvShowController::class, 'index'])->name('tvShows.index');
+Route::get('/tv-shows/{tv_show:slug}', [FrontendTvShowController::class, 'show'])->name('tvShows.show');
+Route::get('/tv-shows/{tv_show:slug}/seasons/{season:slug}', [FrontendTvShowController::class, 'seasonShow'])->name('season.show');
+Route::get('/episodes/{episode:slug}', [FrontendTvShowController::class, 'showEpisode'])->name('episodes.show');
+Route::get('/casts', [FrontendCastController::class, 'index'])->name('casts.index');
+Route::get('/casts/{cast:slug}', [FrontendCastController::class, 'show'])->name('casts.show');
+Route::get('/genres/{genre:slug}', [FrontendGenreController::class, 'show'])->name('genres.show');
 
 Route::middleware(['auth:sanctum', 'verified', 'role:admin'])->prefix('admin')->name('admin.')->group(function () {
     Route::get('/', function () {
