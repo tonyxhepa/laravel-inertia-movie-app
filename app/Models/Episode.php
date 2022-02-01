@@ -19,4 +19,9 @@ class Episode extends Model
         $this->attributes['slug'] = Str::slug($value);
     }
 
+    public function season()
+    {
+        return $this->belongsTo(Season::class);
+    }
+
 }

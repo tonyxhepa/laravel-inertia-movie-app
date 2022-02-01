@@ -5,16 +5,28 @@ namespace App\Http\Controllers\Frontend;
 use App\Http\Controllers\Controller;
 use App\Models\Movie;
 use Illuminate\Http\Request;
+use Inertia\Inertia;
 
 class MovieController extends Controller
 {
     public function index()
     {
-        # code...
+       return Inertia::render('Frontend/Movies/Index', [
+           'movies' => Movie::orderBy('created_at', 'desc')->with('genres')->paginate(4)
+       ]);
     }
 
     public function show(Movie $movie)
     {
-        # code...
+        $latests = Movie::orderBy('created_at', 'desc')->take(9)->get();
+
+        return Inertia::render('Frontend/Movies/Show', [
+            'movie' => $movie,
+            'latests' => $latests,
+            'genres' => $movie->genres,
+            'casts' => $movie->casts,
+            'tags' => $movie->tags,
+            'trailers' => $movie->trailers
+        ]);
     }
 }

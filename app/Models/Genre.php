@@ -17,4 +17,9 @@ class Genre extends Model
         $this->attributes['title'] = $value;
         $this->attributes['slug'] = Str::slug($value);
     }
+
+    public function movies()
+    {
+        return $this->belongsToMany(Movie::class);
+    }
 }

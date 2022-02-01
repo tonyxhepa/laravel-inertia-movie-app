@@ -7,12 +7,15 @@ use App\Models\Episode;
 use App\Models\Season;
 use App\Models\TvShow;
 use Illuminate\Http\Request;
+use Inertia\Inertia;
 
 class TvShowController extends Controller
 {
     public function index()
     {
-        # code...
+        return Inertia::render('Frontend/TvShows/Index', [
+            'tvShows' => TvShow::orderBy('created_at', 'desc')->paginate(12)
+        ]);
     }
 
     public function show(TvShow $tvShow)

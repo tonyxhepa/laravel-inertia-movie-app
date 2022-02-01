@@ -180,7 +180,7 @@
             v-show="open"
             class="
               absolute
-              z-10
+              z-30
               right-0
               w-full
               mt-2

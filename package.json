@@ -26,6 +26,8 @@
         "vue-loader": "^16.1.2"
     },
     "dependencies": {
+        "@headlessui/vue": "^1.4.3",
+        "@tailwindcss/aspect-ratio": "^0.4.0",
         "vue-multiselect": "^3.0.0-alpha.2"
     }
 }
