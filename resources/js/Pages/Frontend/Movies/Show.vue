@@ -21,7 +21,7 @@
                   <span>{{ movie.release_date }}</span>
                   <span class="ml-2 space-x-1">
                     <Link
-                      v-for="genre in genres"
+                      v-for="genre in movieGenres"
                       :key="genre.id"
                       class="font-bold hover:text-blue-500"
                       :href="`/genres/${genre.slug}`"
@@ -84,7 +84,9 @@
       >
         <div class="flex justify-between">
           <div class="w-7/12">
-            <h1 class="flex text-white font-bold text-xl">Movie Casts</h1>
+            <h1 class="flex text-slate-600 dark:text-white font-bold text-xl">
+              Movie Casts
+            </h1>
             <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mt-4">
               <MovieCard v-for="cast in casts" :key="cast.id">
                 <template #image>
@@ -96,13 +98,19 @@
                   </Link>
                 </template>
                 <Link :href="`/casts/${cast.slug}`">
-                  <span class="text-white">{{ cast.name }}</span>
+                  <span class="text-slate-600 dark:text-white">{{
+                    cast.name
+                  }}</span>
                 </Link>
               </MovieCard>
             </div>
           </div>
           <div class="w-4/12">
-            <h1 class="flex text-white font-bold text-xl">Latest movies</h1>
+            <h1
+              class="flex text-slate-600 dark:text-white font-bold text-xl mb-4"
+            >
+              Latest movies
+            </h1>
             <div class="grid grid-cols-3 gap-2" v-if="latests.length">
               <Link
                 v-for="lm in latests"
@@ -134,7 +142,9 @@
           v-for="tag in movie.tags"
           :key="tag.id"
           class="font-bold text-white hover:text-indigo-200 cursor-pointer"
-          >#{{ tag.tag_name }}</span
+          ><Link :href="`/tags/${tag.slug}`" class="ml-2"
+            >#{{ tag.tag_name }}</Link
+          ></span
         >
       </section>
     </main>
@@ -172,7 +182,7 @@
               class="
                 inline-block
                 w-full
-                max-w-2xl
+                max-w-6xl
                 p-6
                 my-8
                 overflow-hidden
@@ -249,7 +259,7 @@ defineProps({
   latests: Array,
   casts: Array,
   tags: Array,
-  genres: Array,
+  movieGenres: Array,
   trailers: Array,
 });
 

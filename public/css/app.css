@@ -1334,12 +1334,6 @@ select {
 .max-w-sm {
   max-width: 24rem;
 }
-.max-w-md {
-  max-width: 28rem;
-}
-.max-w-2xl {
-  max-width: 42rem;
-}
 .flex-1 {
   flex: 1 1 0%;
 }
@@ -2080,6 +2074,10 @@ select {
 .text-red-800 {
   --tw-text-opacity: 1;
   color: rgb(153 27 27 / var(--tw-text-opacity));
+}
+.text-slate-600 {
+  --tw-text-opacity: 1;
+  color: rgb(71 85 105 / var(--tw-text-opacity));
 }
 .text-blue-900 {
   --tw-text-opacity: 1;
