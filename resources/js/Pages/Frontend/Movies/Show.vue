@@ -77,6 +77,34 @@
               </div>
             </div>
           </div>
+          <div class="mt-4">
+            <h3 class="text-2xl font-semibold text-white">Download movie</h3>
+            <div class="flex space-x-4">
+              <a
+                class="
+                  px-4
+                  py-2
+                  text-sm
+                  font-medium
+                  text-white
+                  bg-black
+                  rounded-md
+                  bg-opacity-20
+                  hover:bg-opacity-30
+                  focus:outline-none
+                  focus-visible:ring-2
+                  focus-visible:ring-white
+                  focus-visible:ring-opacity-75
+                "
+                v-for="download in downloads"
+                :key="download.id"
+                :href="download.web_url"
+                target="_blank"
+              >
+                {{ download.name }}
+              </a>
+            </div>
+          </div>
         </div>
       </section>
       <section
@@ -261,6 +289,7 @@ defineProps({
   tags: Array,
   movieGenres: Array,
   trailers: Array,
+  downloads: Array,
 });
 
 const isOpen = ref(false);

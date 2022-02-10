@@ -88,6 +88,78 @@
             </form>
           </div>
           <div
+            class="
+              w-full
+              mb-8
+              sm:max-w-md
+              p-6
+              overflow-hidden
+              bg-white
+              rounded-lg
+              shadow-lg
+            "
+          >
+            <div class="flex space-x-2">
+              <div v-for="download in downloads" :key="download.id">
+                <Link
+                  class="px-4 py-2 bg-red-500 hover:bg-red-700 rounded"
+                  :href="route('admin.downloads.destroy', download.id)"
+                  method="delete"
+                  as="button"
+                  type="button"
+                >
+                  {{ download.name }}
+                </Link>
+              </div>
+            </div>
+            <form @submit.prevent="submitDownload">
+              <div>
+                <jet-label for="name" value="Name" />
+                <jet-input
+                  id="name"
+                  type="text"
+                  class="mt-1 block w-full"
+                  v-model="formDownload.name"
+                  autofocus
+                  autocomplete="name"
+                />
+                <div
+                  class="text-sm text-red-400"
+                  v-if="formDownload.errors.name"
+                >
+                  {{ formDownload.errors.name }}
+                </div>
+              </div>
+
+              <div class="mt-4">
+                <jet-label for="web_url" value="Url" />
+                <input
+                  id="web_url"
+                  type="text"
+                  class="mt-1 block w-full"
+                  v-model="formDownload.web_url"
+                />
+
+                <div
+                  class="text-sm text-red-400"
+                  v-if="formDownload.errors.web_url"
+                >
+                  {{ formDownload.errors.web_url }}
+                </div>
+              </div>
+
+              <div class="flex items-center justify-end mt-4">
+                <jet-button
+                  class="ml-4"
+                  :class="{ 'opacity-25': formDownload.processing }"
+                  :disabled="formDownload.processing"
+                >
+                  add download
+                </jet-button>
+              </div>
+            </form>
+          </div>
+          <div
             class="w-full mb-8 sm:max-w-md p-6 bg-white rounded-lg shadow-lg"
           >
             <div>
@@ -168,6 +240,7 @@ import Multiselect from "vue-multiselect";
 const props = defineProps({
   movie: Object,
   trailers: Array,
+  downloads: Array,
   casts: Array,
   tags: Array,
   movieTags: Array,
@@ -177,6 +250,11 @@ const props = defineProps({
 const form = useForm({
   name: "",
   embed_html: "",
+});
+
+const formDownload = useForm({
+  name: "",
+  web_url: "",
 });
 
 const castForm = useForm({
@@ -189,6 +267,12 @@ const tagForm = useForm({
 function submitTrailer() {
   form.post(`/admin/movies/${props.movie.id}/add-trailer`, {
     onSuccess: () => form.reset(),
+  });
+}
+
+function submitDownload() {
+  formDownload.post(`/admin/movies/${props.movie.id}/add-download`, {
+    onSuccess: () => formDownload.reset(),
   });
 }
 

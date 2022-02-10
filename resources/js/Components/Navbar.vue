@@ -27,7 +27,7 @@
           "
           >Movie App</a
         >
-        <livewire:search />
+        <SearchModal class="w-40 md:w-72" />
         <button
           class="md:hidden rounded-lg focus:outline-none focus:shadow-outline"
           @click="openMobileMenu = !openMobileMenu"
@@ -135,6 +135,7 @@
 import { ref } from "vue";
 import { Link } from "@inertiajs/inertia-vue3";
 import Dropdown from "./Dropdown.vue";
+import SearchModal from "./SearchModal.vue";
 
 const open = ref(false);
 const openMobileMenu = ref(false);

@@ -11,9 +11,9 @@ class MovieController extends Controller
 {
     public function index()
     {
-       return Inertia::render('Frontend/Movies/Index', [
-           'movies' => Movie::orderBy('created_at', 'desc')->with('genres')->paginate(4)
-       ]);
+        return Inertia::render('Frontend/Movies/Index', [
+            'movies' => Movie::orderBy('created_at', 'desc')->with('genres')->paginate(4)
+        ]);
     }
 
     public function show(Movie $movie)
@@ -26,7 +26,8 @@ class MovieController extends Controller
             'movieGenres' => $movie->genres,
             'casts' => $movie->casts,
             'tags' => $movie->tags,
-            'trailers' => $movie->trailers
+            'trailers' => $movie->trailers,
+            'downloads' => $movie->downloads,
         ]);
     }
 }
